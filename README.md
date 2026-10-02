@@ -16,3 +16,4 @@ This repository outlines the technical strategy and system architecture for mana
   * Open Standards matrix (MCAP, Fast DDS, Zenoh, USearch, LanceDB, Cleanlab, ASAM OpenSCENARIO) & Commercial Vendor Landscape (Kognic, Sift, Akridata, Voxel51, AWS IoT FleetWise, Applied Intuition)
   * Concrete configuration artifacts (`storage_eviction_policy.yaml` & `zenoh_bridge_config.json5`)
   * 4-phase implementation roadmap and operational review alignment matrix
+  * **Comprehensive Reference Library (Section 13)**: 40 authoritative, hyperlinked industry citations and academic papers backing all financial, hardware, algorithmic, and networking claims.
