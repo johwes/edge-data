@@ -11,3 +11,4 @@ Thumbs.db
 *.tmp
 *.log
 scratch/
+docs/Remote Fleet Data Triage Architecture.md
