@@ -14,3 +14,4 @@ This repository outlines the technical strategy and system architecture for mana
   * 4D world model auto-labeling and mining semantic ontology
   * Commercial product landscape & vendor evaluation (Kognic, Akridata, Voxel51, AWS IoT FleetWise, Foxglove MCAP, Applied Intuition)
   * 4-phase implementation roadmap
+  * Architectural hardening & operational review alignment (PTP OCXO holdover, 10 Gbps optical dock, vector versioning, 3 DWPD NVMe grace policy)

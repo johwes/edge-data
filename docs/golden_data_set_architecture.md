@@ -120,6 +120,11 @@ Raw point clouds and imagery cannot be compared across the fleet, but lightweigh
 * The vector is compared against an onboard **k-NN index of baseline operational scenes**.
 * If the cosine distance $d(\mathbf{v}_{\text{scene}}, \mathbf{V}_{\text{baseline}}) > \tau_{\text{novelty}}$, the clip is tagged as an out-of-distribution environmental anomaly (e.g., rare whiteout blizzard, heavy mud rooster-tails, atypical rock wall geological formations).
 
+> [!IMPORTANT]
+> **Vector Space Versioning & Depot Re-Indexing:** When autonomy engineering pushes an Over-The-Air (OTA) update to the onboard vision backbone model (e.g., hash `a8f90c4e12` $\rightarrow$ `b9e01d5f34`), the latent vector space shifts. To prevent false-positive novelty avalanches or blind spots:
+> 1. All embeddings are stored with explicit model hash and vector space schema versions (`latent_vector_spec`).
+> 2. The **Depot Edge NAS** executes an automated background job to re-compute embeddings for the local baseline dataset whenever a new model hash is deployed across the fleet.
+
 ### 4.4 Filter 4: Targeted Harvesting Campaigns (OTA Dynamic Schemes)
 Autonomous engineering teams frequently train models for specific operational issues. Configurable logging schemes are pushed to specific trucks or sectors without software redeployments:
 * *Campaign Example:* "Harvest 15 seconds of raw uncompressed LiDAR + forward cameras whenever a truck enters Pit Sector 7 during haul road watering operations."
@@ -138,7 +143,7 @@ Data offloading follows a strict hierarchy designed around the real physical ban
 
 ```
 +─────────────────────────────────────────────────────────────────────────────────+
-|                               DATA FLOW TOPOLOGY                                |
+|                          HARDENED DATA FLOW TOPOLOGY                            |
 +─────────────────────────────────────────────────────────────────────────────────+
 
   [ Autonomous Haul Truck ]
@@ -149,31 +154,47 @@ Data offloading follows a strict hierarchy designed around the real physical ban
      │     Bandwidth: ~10-50 kbps/truck  │  Volume: ~100-200 MB/truck/day
      │     Target: Cloud Fleet Management & GDS Metadata Index
      │
-     └─► (Enters Maintenance / Fueling Depot Island)
+     └─► (Enters Maintenance / Fueling Depot Island: 15–20 min Stop)
            │
-           ├─► [Tier 2: High-Speed Depot Offload] ──► Wi-Fi 6 / 60 GHz mmWave Dock
-           │     Payload: Pre/Post Trigger Snippets, Novelty Clips, Campaign Data
-           │     Transfer Rate: 1.2 - 2.5 Gbps burst per truck (15-20 min turnaround)
-           │     Volume: ~25-50 GB/truck/day  │  Site Aggregate: 2.5 - 5 TB/day
-           │     Target: On-Site Edge Server & Staging NAS (250 TB)
-           │               │
-           │               ├─► [Selective Cloud Uplink] (Overnight WAN)
-           │               │     Surgically requested GDS raw blobs (<50 GB/day)
-           │               │
-           │               └─► [Tier 3: Sneakernet / Physical Transit]
-           │                     Payload: Cold rolling raw archives, dense sensor bags
-           │                     Hardware: Swappable Rugged NVMe Shuttles (e.g. AWS Snowball)
-           │                     Frequency: Bi-weekly / Monthly physical shipment
+           ├──► [Tier 2A: Primary Physical Dock] ──► Rugged Optical / Auto-Magnetic Dock
+           │      Physical Rate: 5 - 10 Gbps (50 GB offloaded in <80 seconds)
+           │      Resistant to dust attenuation and heavy machinery RF multipath
+           │
+           └──► [Tier 2B: Wireless Fallback] ──► Industrial Wi-Fi 6 / 60 GHz mmWave
+                  Sustained Rate: 150 - 300 Mbps in dusty pit environments
+                  Managed by Dynamic Offload Prioritization Engine
+                  │
+                  ▼
+         [Site Depot Edge Server & Staging NAS (250 TB)]
+           │
+           ├─► [Selective Cloud Uplink] (Overnight WAN)
+           │     Surgically requested GDS raw blobs (<50 GB/day)
+           │
+           └─► [Tier 3: Sneakernet / Physical Transit]
+                 Payload: Cold rolling raw archives, dense sensor bags
+                 Hardware: Swappable Rugged NVMe Shuttles (e.g. AWS Snowball)
+                 Frequency: Bi-weekly / Monthly physical shipment
 +─────────────────────────────────────────────────────────────────────────────────+
 ```
 
-### 5.1 Tier Sizing & Quantitative Reduction Funnel
+### 5.1 Dual-Mode Depot Offload Interface & Throughput Sizing
+In active mining environments, RF wireless offloads suffer from dust attenuation, multipath reflection off massive haulers, and concurrent channel contention, dropping real-world Wi-Fi 6 throughput to **150–300 Mbps**. At 200 Mbps, offloading 50 GB exceeds 30 minutes, overflowing vehicle storage. 
+
+To eliminate this bottleneck, the offload topology uses a **hybrid dual-interface**:
+1. **Primary Physical Dock (5–10 Gbps):** Ruggedized, sealed, auto-coupling magnetic push-connectors or automated optical transceiver docks located at stationary fueling bays. Offloads 50 GB in under **80 seconds** with zero RF degradation.
+2. **Wireless Fallback (Wi-Fi 6 / mmWave):** Engaged when docking at secondary unequipped parking locations or during mobile service truck visits.
+3. **Dynamic Offload Prioritization Engine:** When operating over constrained wireless links ($<300\text{ Mbps}$), the vehicle's edge agent automatically adapts its transfer queue:
+   * **Priority 1 (Mandatory):** Filter 1 (Deterministic/E-Stops/Interventions) and Filter 2 (High Uncertainty).
+   * **Priority 2 (Deferred):** Filter 4 (Targeted Campaigns).
+   * **Priority 3 (Suppressed):** Filter 5 (Nominal Stratified Baselines) are suppressed and purged to protect local buffer space.
+
+### 5.2 Tier Sizing & Quantitative Reduction Funnel
 For a scaled site producing **500 TB/day** across the fleet:
 
 | Tier | Transmission Medium | Daily Data Volume | Latency / Availability | Purpose |
 | :--- | :--- | :--- | :--- | :--- |
 | **Tier 1: Immediate Telemetry** | Private 5G / Starlink Satellite | **~10–20 GB / day** (fleet total) | Real-time (<500ms) | Fleet safety alerts, disengagement coordinates, and JSON metadata catalog. |
-| **Tier 2: Depot Edge Ingestion** | High-speed Wi-Fi 6 / mmWave docking at fuel bays | **~5–10 TB / day** (fleet total) | Hourly / Shift-change | Ingestion of all candidate snippets, campaign bags, and sensor health logs. |
+| **Tier 2: Depot Edge Ingestion** | Hybrid: 10 Gbps Optical Dock + Wi-Fi 6 Fallback | **~5–10 TB / day** (fleet total) | Hourly / Shift-change | Ingestion of all candidate snippets, campaign bags, and sensor health logs. |
 | **Tier 3: Cloud GDS Ingestion** | Cloud-directed pull over night-time WAN / Sat | **~20–50 GB / day** (fleet total) | 12–24 hours | Highest-priority GDS snippets, auto-labeled training cases, edge-case anchors. |
 | **Tier 4: Physical Archive (Sneakernet)** | Rugged U.2/U.3 NVMe storage shuttles | **20–50 TB / batch** (on demand) | 7–14 days transit | Forensic incident investigations, baseline sensor re-simulation, regulatory audits. |
 
@@ -236,6 +257,12 @@ The metadata-first approach relies on a standardized, low-overhead JSON record g
     "speed_kmh": 22.4,
     "road_gradient_percent": -7.2,
     "gnss_rtk_status": "FIXED_INTEGER",
+    "ptp_clock_sync": {
+      "master_clock": "OCXO_IEEE1588_PTP",
+      "holdover_active": false,
+      "max_drift_microseconds": 0.35,
+      "sync_status": "LOCKED"
+    },
     "sun_elevation_deg": 8.4,
     "sun_azimuth_deg": 82.1,
     "dust_density_index": 0.74,
@@ -258,9 +285,12 @@ The metadata-first approach relies on a standardized, low-overhead JSON record g
       "measured_value": -3.8
     }
   ],
-  "latent_vector_128d": [
-    0.0421, -0.1842, 0.9201, "...", 0.0154
-  ],
+  "latent_vector_spec": {
+    "model_backbone_hash": "a8f90c4e12",
+    "vector_space_version": "v2.1",
+    "dimensions": 128,
+    "vector": [0.0421, -0.1842, 0.9201, "...", 0.0154]
+  },
   "candidate_payload": {
     "total_size_mb": 1420.5,
     "pruned_channels": [
@@ -276,9 +306,9 @@ The metadata-first approach relies on a standardized, low-overhead JSON record g
 
 ---
 
-## 8. Site Infrastructure & Storage Lifecycle Management
+## 8. Site Infrastructure, Hardware Hardening & Storage Lifecycle
 
-Deploying a 500 TB/day triage pipeline requires balancing edge compute, depot staging buffers, and automated lifecycle eviction.
+Deploying a 500 TB/day triage pipeline requires balancing edge compute endurance, clock holdover during GNSS denial, depot staging buffers, and automated lifecycle eviction.
 
 ```
                           DEPOT STAGING SERVER (250 TB NAS)
@@ -292,17 +322,47 @@ Deploying a 500 TB/day triage pipeline requires balancing edge compute, depot st
   (Surgically pulled via WAN)                             (Overwritten by new shifts)
 ```
 
-### 8.1 On-Truck Hardware Provisioning
-* **Storage:** 2x 15.36 TB Enterprise Rugged U.2/U.3 NVMe SSDs in RAID-0/1 configuration. Provides 72 hours of localized candidate buffer.
-* **Compute Isolation:** Compute loads for active learning, vector encoding, and ring-buffer compression are pinned to isolated low-priority NPU/GPU execution streams to prevent CPU/GPU contention with real-time planning and safety systems.
+### 8.1 On-Truck Storage Endurance & Thermal Contention
+Continuous circular ring buffering at 3–5 TB/day per vehicle imposes a sustained write throughput of **35–60 MB/s** (24/7/365). In unconditioned in-cab electronics bays where ambient temperatures reach **45°C–50°C**, high sustained IOPS combined with GPU/NPU active learning execution risks severe thermal throttling.
 
-### 8.2 Depot Staging Server (On-Site Edge NAS)
+* **Drive Endurance Specification:** Mandate enterprise-grade U.2/U.3 NVMe SSDs rated for **$\ge 3$ Drive Writes Per Day (DWPD)** over a 5-year operating warranty, equipped with hardware Power-Loss Protection (PLP). Consumer or standard datacenter drives (<1 DWPD) will suffer flash wear exhaustion within 12–18 months.
+* **Thermal & Bus Isolation:** 
+  * Storage drives and compute accelerators are mounted in conduction-cooled, sealed IP67 enclosures thermally coupled to the vehicle's structural chassis.
+  * Direct Memory Access (DMA) and storage write queues are isolated on dedicated PCIe lanes separate from the safety-critical autonomy and path-planning buses.
+
+### 8.2 Hardware-Backed PTP Holdover Circuitry (GNSS Outage Protection)
+Deep open-pit benches frequently experience complete GNSS RTK dropouts and heavy multipath interference. If the vehicle relies solely on GNSS-derived 1PPS clock signals, loss of lock causes rapid phase drift across the sensor suite. At 25 km/h, a timing desynchronization of just **10 milliseconds** between a 30 FPS camera and a 10 Hz LiDAR sweep produces a **7-centimeter spatial registration error**, causing bounding-box jitter and corrupting 4D auto-labeling.
+
+* **Holdover Hardware:** Primary on-vehicle network switches are equipped with an integrated **Oven-Controlled Crystal Oscillator (OCXO)** or **Chip-Scale Atomic Clock (CSAC)**.
+* **Performance Guarantee:** Guarantees master IEEE 1588 PTP time drift **$< 1.0\,\mu\text{s}$ over a 24-hour continuous GNSS outage**, ensuring pristine multi-modal sensor alignment regardless of bench depth.
+
+### 8.3 Graceful Storage Degradation Policy (Queue-Overflow Management)
+If a haul truck is delayed in returning to the fueling depot or experiences temporary docking offload failures, onboard NVMe storage will reach capacity. To prevent buffer overflows or uncommanded dropped frames, the vehicle edge agent enforces a strict **Priority-Based Dynamic Pruning Sequence**:
+
+```
+[Onboard Storage Capacity > 85%]
+           │
+           ├─► 1. Purge Nominal Stratified Baseline Samples (Filter 5)
+           │      (Discard redundant nominal anchors; non-critical)
+           │
+           ├─► 2. Downsample LiDAR Point Clouds on Candidate Snippets
+           │      (Crop points >50m, quantize 32-bit floats to 16-bit fixed-point)
+           │
+           ├─► 3. Drop Secondary / Perimeter Camera Views
+           │      (Prune frustums to forward-facing primary camera only; saves 75%)
+           │
+           └─► 4. Lock Safety-Critical & E-Stop Snippets (Filter 1 - Strictly Non-Evictable)
+                  (Permanently preserved until physical offload or manual override)
+```
+
+### 8.4 Depot Staging Server (On-Site Edge NAS)
 * **Capacity:** 250 TB to 500 TB ruggedized All-Flash or Tiered NVMe/SAS NAS located at the mine's main equipment maintenance shop / fueling island.
-* **Network Ingestion:** 4x 10GbE / 25GbE fiber uplinks powering rugged industrial outdoor Wi-Fi 6 (802.11ax) access points or mmWave 60 GHz wireless links at the fuel bays.
+* **Ingestion Interconnects:** Dual 10GbE / 25GbE optical interfaces dedicated to the fueling island docking transceivers + redundant outdoor Wi-Fi 6 APs.
 * **Automated Retention Lifecycle:**
-  * **Day 0–3:** Full uncompressed candidate snippets preserved.
-  * **Day 4–7:** If not flagged for cloud pull, downsample point clouds and compress imagery by 50%.
+  * **Day 0–3:** Full uncompressed candidate snippets preserved in high-speed flash tier.
+  * **Day 4–7:** If not requested for cloud pull, downsample point clouds and compress imagery by 50% into spinning-disk tier.
   * **Day 14:** Hard eviction of unrequested candidate snippets.
+* **Depot Vector Re-Indexing Daemon:** Runs background batch embedding jobs across the local baseline dataset whenever an OTA update introduces a new vision backbone model hash.
 
 ---
 
@@ -411,4 +471,29 @@ flowchart LR
 * Deploy lightweight edge encoder backbones for real-time latent embedding generation.
 * Implement automated cross-fleet deduplication and k-NN novelty scoring (e.g., via Voxel51 / Akridata) at the depot server.
 * Close the loop with Kognic 4D multi-sensor annotation, offline world models, and automated synthetic scenario generation.
+
+---
+
+## 12. Architectural Hardening & Operational Review Alignment
+
+Following independent architectural peer review, the following critical edge vulnerabilities were systematically analyzed and resolved with concrete hardware and protocol specifications:
+
+```
+                  HARDENED ARCHITECTURAL MITIGATIONS
+                                   │
+   ┌─────────────────┬─────────────┴─────────────┬─────────────────┐
+   ▼                 ▼                           ▼                 ▼
+[Dual-Mode Dock]   [PTP OCXO Holdover]        [Vector Versioning] [Priority Pruning]
+ • 10 Gbps Optical  • <1.0 µs drift over       • Schema hash       • Storage >85% triggers
+   clears 50 GB in    24h GNSS denial keeps      tracking + depot    deterministic down-
+   <80 seconds        4D auto-labeling valid     batch re-indexing   sample & channel drop
+```
+
+| Technical Pillar | Baseline Assumption | Operational Vulnerability | Hardened Architecture Specification | Section Reference |
+| :--- | :--- | :--- | :--- | :--- |
+| **Depot Offload Throughput** | Continuous 1.2–2.5 Gbps Wi-Fi 6 offload during 15-min fueling stop. | Dust attenuation, metal multipath, and multi-truck RF contention drop speeds to **150–300 Mbps**, taking >30 min to offload 50 GB and overflowing storage. | **Dual-Mode Hybrid Interface:** Rugged optical/magnetic auto-dock delivering **5–10 Gbps** (<80s transfer) + Dynamic Priority Offload Engine that sheds Filter 5 baseline clips if wireless bandwidth drops <300 Mbps. | [Section 5.1](#51-dual-mode-depot-offload-interface--throughput-sizing) |
+| **Sensor Time Synchronization** | Standard GNSS RTK 1PPS + IEEE 1588 PTP. | Deep pit benches experience prolonged GNSS denial; microsecond-level clock drift causes **spatial registration errors** (>7 cm) between cameras and LiDAR, corrupting 4D auto-labeling. | **Hardware-Backed OCXO / CSAC Holdover:** Integrated into sensor gateway switch, guaranteeing **$<1.0\,\mu\text{s}$ drift over 24h** of complete GNSS denial. | [Section 8.2](#82-hardware-backed-ptp-holdover-circuitry-gnss-outage-protection) |
+| **Novelty Vector Embeddings** | Static 128-D vector cosine distance against onboard k-NN baseline. | OTA updates to vision backbone model shift latent vector space, invalidating onboard indices and causing false-positive novelty avalanches. | **Vector Space Versioning & Depot Re-Indexing:** Schema tracks `model_backbone_hash` and `vector_space_version`; depot NAS automatically re-indexes local baseline embeddings upon OTA push. | [Section 4.3](#43-filter-3-latent-space-vector-embeddings--novelty-detection) & [Section 7](#7-metadata-schema-specification-the-searchable-index) |
+| **Storage Endurance & Thermals** | 2x 15.36 TB U.2 NVMe SSDs in RAID-0/1. | Continuous 35–60 MB/s writes in **>45°C** in-cab bays wear out flash in <18 months and trigger thermal throttling, risking dropped frames in the autonomy thread. | **3 DWPD Enterprise NVMe with PLP:** Conduction-cooled chassis coupling, dedicated PCIe bus isolation, and **Graceful Storage Degradation Policy** (>85% capacity triggers tiered eviction). | [Section 8.1](#81-on-truck-storage-endurance--thermal-contention) & [Section 8.3](#83-graceful-storage-degradation-policy-queue-overflow-management) |
+
 
