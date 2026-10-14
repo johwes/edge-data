@@ -24,7 +24,7 @@ In autonomous mining and heavy industrial transport, data qualifies for the Gold
 
 ## 2. The 6-Filter Information Entropy Funnel
 
-Rather than capturing continuous uncurated streams, the triage engine subjects all sensor frames to a sequential 6-filter evaluation funnel:
+Rather than capturing continuous uncurated streams, the triage engine evaluates incoming sensor data through a two-stage triage funnel: parallel multi-criteria screening (Filters 1–5 in logical OR) flags candidate snippets, followed by fleet-wide coreset deduplication (Filter 6) and adaptive daily quota allocation:
 
 ```mermaid
 flowchart TD
@@ -85,13 +85,16 @@ flowchart TD
     end
 ```
 
-1. **Backward-Compatible Training (BCT):** When training an upgraded vision encoder φ_new, the cloud training loss function couples task objectives with an orthogonal backward-compatibility constraint. As a proposed architectural synthesis combining Shen et al.'s representation regression loss with orthogonal projection constraints:
-   > **L_BCT = L_task + λ ||R φ_new(x) - φ_old(x)||²₂   subject to Rᵀ R = I**  
-   Applying an orthogonal transformation matrix R preserves the global metric geometry of the legacy baseline manifold while allowing the upgraded model to learn novel task features without severe distortion.
-2. **Zero-Shot Query Drift Compensation (QDC):** Prior to fleet-wide OTA rollout, a calibration dataset of N operational mining scenes is passed through both legacy and upgraded encoders to compute a first-order linear bias correction offset:
-   > **Δ_old→new = (1 / N) * Σ [ φ_new(xᵢ) - φ_old(xᵢ) ]**  
-   This offset is bundled directly in the OTA deployment payload. Incoming query vectors are compensated at runtime: `v_comp = v_new - Δ_old→new`, suppressing artificial novelty spikes caused by coordinate translation.
-   > **Non-Linear Manifold Shift & Avalanche Rollback:** Mean-translation Δ_old→new is strictly a first-order linear approximation; it cannot fully compensate for complex non-linear manifold warping across deep layers. Consequently, QDC requires per-site calibration and real-time trigger rate monitoring. If the candidate novelty trigger rate exceeds **>3× the historical baseline** in the 4-hour window following an OTA rollout, the edge agent initiates an **automated rollback**: reverting to the legacy feature extractor or temporarily elevating τ_novelty to prevent storage exhaustion until full Edge Forward-Compatible Transformation (FCT) re-indexing completes.
+1. **Backward-Compatible Training (BCT):** When training an upgraded vision encoder φ_new, the cloud training loss couples task objectives with an orthogonal backward-compatibility constraint. As a proposed architectural synthesis combining Shen et al.'s representation regression loss with orthogonal projection constraints on a Stiefel manifold:
+   > **L_BCT = L_task + λ * E_{x ~ D} [ || R * φ_new(x) - φ_old(x) ||²₂ ]   subject to R * Rᵀ = I_{d_old}**  
+   where:
+   * E_{x ~ D} denotes expectation over the operational data distribution D.
+   * λ > 0 is a balancing hyperparameter weighting backward-compatibility against task-specific accuracy.
+   * When latent dimensionality expands across generations (e.g., d_old = 128 to d_new = 256), R ∈ ℝ^{d_old × d_new} represents a semi-orthogonal projection matrix on the Stiefel manifold satisfying R * Rᵀ = I_{d_old}, mapping the expanded latent space onto legacy baseline dimensions while preserving metric inner products.
+2. **Zero-Shot Query Drift Compensation (QDC):** When upgrading between models of identical latent dimensionality (d_old = d_new), prior to fleet-wide OTA rollout, a calibration dataset of N operational scenes (nominally N = 500 to 1,000 representative mining scenes sampled across diverse lighting, weather, and dust conditions) is passed through both legacy and upgraded encoders to compute a first-order linear bias correction offset:
+   > **Δ_old→new = (1 / N) * Σ_{i=1}^N [ φ_new(xᵢ) - φ_old(xᵢ) ]**  
+   This offset is bundled directly in the OTA deployment payload. Incoming query vectors are compensated at runtime: `v_comp = v_new - Δ_old→new`, suppressing artificial novelty spikes caused by rigid coordinate translation.
+   > **Non-Linear Manifold Shift & Avalanche Rollback:** Mean-translation Δ_old→new is strictly a first-order linear approximation; it cannot fully compensate for complex non-linear manifold warping across deep layers. Consequently, QDC requires per-site calibration and real-time trigger rate monitoring. If the candidate novelty trigger rate exceeds **3× the historical baseline** in the 4-hour window following an OTA rollout, the edge agent initiates an **automated rollback**: reverting to the legacy feature extractor or temporarily elevating τ_novelty to prevent storage exhaustion until full Edge Forward-Compatible Transformation (FCT) re-indexing completes.
 3. **Edge Forward-Compatible Transformation (FCT) & Batch Re-Indexing:** The Edge Station Pod NAS maintains the historical baseline gallery. When an OTA update is deployed, an asynchronous background job re-embeds the local baseline dataset using a trained transformation module, compiling an updated native M_new k-NN index.
 
 ### 2.4 Filter 4: Targeted Harvesting Campaigns (OTA Dynamic Schemes)
@@ -128,10 +131,10 @@ Because the triage and deduplication engine is modular, autonomy architects can 
 
 Every filter in §2 is a *recall* mechanism: data not flagged by any filter is discarded or overwritten in the circular ring buffer. This is an intentional trade-off for the 95%+ redundant nominal driving the architecture is built to discard, but it introduces an operational risk: **a miscalibrated or drifted uncertainty/novelty model could fail to flag a genuine safety-relevant precursor**.
 
-* **Independent Trigger Floor:** Filter 1's deterministic kinematic/hardware triggers are intentionally independent of the learned models in Filters 2–3, ensuring degraded perception models do not blind the hard-trigger safety net.
+* **Layered Trigger Floor:** While Filter 1 includes perception-assisted metrics (TTC envelopes and lens mud/dust attenuation alerts), its core kinematic safety net relies on deterministic, hardware-level CAN triggers (chassis accelerometers, E-stops, AEB hydraulic pressure, and operator takeovers) that operate strictly independently of the deep learning perception and uncertainty heads in Filters 2–3. If a neural network suffers representation collapse or silent inference failure, the physical kinematic triggers remain fully operational.
 * **Continuous Low-Rate Forensic Shadow Log:** In addition to high-fidelity triggered snippets, each truck retains an overwritten, heavily decimated rolling buffer (1 FPS H.265 forward camera @ ~200 KB/s, 1 Hz spatially cropped LiDAR @ ~250 KB/s, and full 100 Hz CAN kinematics @ ~50 KB/s ≈ 0.5 MB/s aggregate) covering the **prior 24–48 hours** on secondary storage for insurance and regulatory investigations:
   * **Storage Sizing:** Sized at **~43.2 GB/day/truck** (~86.4 GB for 48 hours of total retention).
-  * **Endurance Impact:** Across a 15.36 TB drive tier (or even lower-cost QLC secondary media rated for 0.5–1.0 DWPD), 43.2 GB/day imposes an endurance burden of only **~0.0028 DWPD** (<0.3% of drive daily endurance limit), incurring negligible wear while guaranteeing an unassailable forensic replay trail.
+  * **Endurance Impact:** Across a 15.36 TB drive tier (or even lower-cost QLC secondary media rated for 0.5–1.0 DWPD), 43.2 GB/day imposes an endurance burden of only **~0.0028 DWPD** (<0.6% of a 0.5 DWPD drive's daily endurance limit), incurring negligible wear while guaranteeing an unassailable forensic replay trail.
 * **Post-Hoc Recall Auditing:** Edge Station Pods periodically re-score random samples of the forensic shadow log against current novelty thresholds to detect threshold drift before real incidents occur.
 * **Tamper-Evidence:** Thresholds controlling Filter 1 are cryptographically signed and checksummed against known manifests to ensure compliance.
 
@@ -139,23 +142,25 @@ Every filter in §2 is a *recall* mechanism: data not flagged by any filter is d
 
 ## 5. Daily Snippet Budget & Per-Filter Quota Allocation Policy
 
-A 45-second raw rolling buffer recorded at 35–60 MB/s produces **1.6 to 2.7 GB of uncompressed data per event**. After applying spatial frustum pruning (70%–85% reduction) and temporal decimation, an individual pruned snippet occupies **250 to 500 MB** (average ~350 MB).
+A 45-second raw rolling buffer recorded at 35–60 MB/s produces **1.6 to 2.7 GB of uncompressed data per event**. After applying spatial frustum pruning (70%–85% reduction) and temporal decimation, an individual pruned snippet occupies **~240 to 810 MB** (nominal average ~350 MB, expanding toward 500–810 MB when reversing safety exceptions preserve rear sensors).
 
-Given a strict **10 to 20 GB/day WAN uplink ceiling** for a 10-truck pit cell, the site infrastructure operates under a hard budget of **30 to 60 high-fidelity snippets per day** across the entire fleet. To prevent a single noisy sensor from exhausting the daily satellite allotment, Edge Station Pods enforce an **adaptive quota allocation policy**:
+Given a strict **10 to 20 GB/day WAN uplink ceiling** for a 10-truck pit cell, the site infrastructure operates under a hard budget of **28 to 57 high-fidelity snippets per day** across the fleet (at ~350 MB average pruned snippet size; ~12 to 25 snippets/day if safety exceptions elevate average sizes toward 800 MB). To prevent a single noisy sensor from exhausting the daily satellite allotment, Edge Station Pods enforce an **adaptive quota allocation policy**:
 
-| Triage Filter | Guaranteed Daily Quota | Threshold Adaptivity Mechanism | Overflow Handling |
+> **Pre-Deduplication Candidate Quotas vs. Post-Filter-6 Upload Budget:** The quotas assigned to Filters 1–5 in the table below represent **pre-deduplication daily candidate ceilings** (summing to ~47–50 candidate snippets/day/cell across the 10 trucks). Because Filter 6 suppresses 60%–80% of repetitive cross-fleet scenes, this translates to an expected **10 to 20 unique uploaded snippets/day/site** (~3.5 to 7.0 GB/day nominal at 350 MB, or 8–16 GB/day during reversing-heavy shifts), safely inside the 10–20 GB/day WAN ceiling while leaving ample headroom for unexpected safety bursts.
+
+| Triage Filter | Pre-Dedup Candidate Ceiling | Threshold Adaptivity Mechanism | Overflow Handling |
 | :--- | :--- | :--- | :--- |
 | **Filter 1: Kinematic / Safety (E-Stops, AEB)** | **100% Guaranteed** (No hard cap; typically 2–5/day) | Deterministic; thresholds are non-negotiable safety floors. | Highest QoS tier. Preempts and evicts all lower-priority staged clips. |
-| **Filter 2: Active Learning / Model Uncertainty** | **Max 15 snippets / day / site** | **PID Threshold Adaptation:** If candidate rate exceeds budget, epistemic confidence trigger τ_entropy automatically tightens. | Deferred to local Pod NVMe tier; dropped from WAN queue if unrequested. |
-| **Filter 3: Latent k-NN Novelty Discovery** | **Max 15 snippets / day / site** | **Dynamic Cosine Margin:** Cosine distance threshold τ_novelty dynamically floats upward during high-entropy conditions. | Lowest novelty scores discarded first. Automated rollback if trigger rate >3× baseline. |
-| **Filter 4: Targeted Dynamic Campaigns** | **Max 10 snippets / day / site** | Quota pre-allocated and distributed per active engineering campaign ID. | Rate-limited per geofence sector once daily campaign ceiling is met. |
-| **Filter 5: Stratified ODD Nominal Baselines** | **Fixed 5 snippets / day / site** | Deterministic uniform sampling (1 clip per operational quadrant). | First to be shed if WAN link degrades or buffer exceeds 80% capacity. |
-| **Filter 6: Fleet Coreset Resolution** | **Site Deduplication Layer** | Suppresses 60%–80% of cross-truck redundant triggers before WAN staging. | Guarantees final consolidated uplink stays strictly within the 10–20 GB/day envelope. |
+| **Filter 2: Active Learning / Model Uncertainty** | **Max 15 candidate snippets / day / cell** | **PID Threshold Adaptation:** If candidate rate exceeds budget, epistemic confidence trigger τ_entropy automatically tightens. | Deferred to local Pod NVMe tier; dropped from WAN queue if unrequested. |
+| **Filter 3: Latent k-NN Novelty Discovery** | **Max 15 candidate snippets / day / cell** | **Dynamic Cosine Margin:** Cosine distance threshold τ_novelty dynamically floats upward during high-entropy conditions. | Lowest novelty scores discarded first. Automated rollback if trigger rate >3× baseline. |
+| **Filter 4: Targeted Dynamic Campaigns** | **Max 10 candidate snippets / day / cell** | Quota pre-allocated and distributed per active engineering campaign ID. | Rate-limited per geofence sector once daily campaign ceiling is met. |
+| **Filter 5: Stratified ODD Nominal Baselines** | **Fixed 5 candidate snippets / day / cell** | Deterministic uniform sampling (1 clip per operational quadrant). | First to be shed if WAN link degrades or buffer exceeds 80% capacity. |
+| **Filter 6: Fleet Coreset Resolution** | **Site Deduplication Layer** | Suppresses 60%–80% of cross-truck redundant triggers before WAN staging. | Yields final 10–20 unique snippets/day (<10–20 GB/day WAN envelope). |
 
-> **Safety-Critical Burst & Filter 1 Preemption / Sneakernet Overflow:** Filter 1 triggers (safety interventions, AEB, E-stops) have zero quota caps because safety data cannot be discarded. However, during an operational anomaly day (e.g., 20 E-stops generating ~7 GB of Filter 1 data alone), this could squeeze learned quotas to zero or breach the daily WAN ceiling. To handle this, the edge pod enforces an explicit **cascading preemption and overflow protocol**:
-> 1. **Cascading WAN Preemption:** As Filter 1 volume expands, the scheduler preemptively sheds lower-priority WAN upload queues in strict reverse order: Filter 5 (nominal baselines) is dropped first, followed by Filter 4 (campaigns), and finally Filters 2 and 3 (uncertainty and novelty).
-> 2. **Local Retention Guarantee:** Dropped clips are never deleted from local storage; they remain fully indexed on the Edge Pod NVMe tier for the standard 7-day retention window.
-> 3. **Sneakernet WAN-Cap Overflow:** If Filter 1 volume itself exceeds 12 GB/day (threatening to saturate real-time satellite telemetry), only the metadata JSON catalog and the first 10 highest-severity Filter 1 snippets are uploaded over WAN. All remaining Filter 1 high-resolution MCAP blobs are automatically diverted and staged to **Tier 4 Physical Storage Shuttles (Sneakernet)** for uncompressed courier transport. This prevents satellite link exhaustion while guaranteeing that 100% of safety-relevant events are preserved for engineering investigation.
+> **Safety-Critical Burst & Filter 1 Preemption / Sneakernet Overflow:** Filter 1 triggers (safety interventions, AEB, E-stops) have zero quota caps because safety data cannot be discarded. Under nominal conditions (2–5 safety events/day), Filter 1 consumes less than 1.8 GB. However, during an operational anomaly day (e.g., severe weather or slick haul roads triggering >30–35 emergency events requiring >12–15 GB of WAN quota), this could threaten to exhaust satellite allotments. To handle this, the edge pod enforces an explicit **cascading preemption and overflow protocol**:
+> 1. **Cascading WAN Preemption:** As Filter 1 volume expands, the scheduler preemptively sheds lower-priority WAN upload queues in strict reverse priority order: Filter 5 (nominal baselines) is dropped first, followed by Filter 4 (campaigns), and finally Filters 2 and 3 (uncertainty and novelty).
+> 2. **Local Retention Guarantee:** Dropped clips are never deleted from local storage; they remain fully indexed on the Edge Pod NVMe tier for the standard 14-day local retention window (aligned with the Tier 2 storage eviction lifecycle in [Spec 04 §3](./04_site_infrastructure_and_hardware.md)).
+> 3. **Sneakernet WAN-Cap Overflow:** If Filter 1 volume itself exceeds 10 GB/day (threatening to saturate real-time satellite telemetry), the edge pod caps Filter 1 real-time WAN egress at 10 GB, transmitting the lightweight JSON metadata catalog for 100% of events plus the top 15 highest-severity MCAP snippets over WAN. The full uncompressed MCAP recordings for all remaining safety snippets are automatically held on local NVMe and queued for bulk collection via the next scheduled Tier 4 Physical Storage Shuttle (sneakernet) cycle (or downloaded via targeted ad-hoc Wi-Fi query). This prevents satellite link exhaustion while guaranteeing that 100% of safety-relevant events are preserved for engineering investigation.
 
 ---
 
