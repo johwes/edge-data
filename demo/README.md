@@ -51,26 +51,24 @@ Apply the namespace, RBAC, Astra Trident storage classes, and NetApp persistent 
 # 1. Create edge-triage namespace and service account
 oc apply -f demo/k8s/00_namespace.yaml
 
-# 2. Configure StorageClass (If using NetApp ONTAP / Astra Trident)
-# Note: If deploying on public cloud (AWS EFS, Azure Files, GCP Filestore), skip this step.
-oc apply -f demo/k8s/01_storage_classes.yaml
+# 2. Configure StorageClass (NetApp ONTAP / Astra Trident ONLY)
+# SKIP THIS STEP if deploying on public cloud (AWS ROSA, Azure ARO, GCP OCP).
+# Only apply this if your cluster has the NetApp Astra Trident CSI Operator installed:
+# oc apply -f demo/k8s/01_storage_classes.yaml
 
 # 3. Create Persistent Volume Claims
-# Note: Sized at a lean 10Gi (raw) and 5Gi (curated) to minimize cloud allocation costs.
-# Set storageClassName in 02_persistent_volumes.yaml to your cloud provider's RWX class:
-#   - NetApp ONTAP / Cloud Volumes ONTAP / AWS FSx: "ontap-nas"
-#   - AWS / ROSA: "efs-sc"
-#   - Azure / ARO: "azurefile-csi"
-#   - GCP: "standard-rwx"
-#   - Cluster Default: omit storageClassName to use cluster default
+# By default, storageClassName is omitted so it binds automatically to your cluster's default StorageClass.
+# Sized at a lean 10Gi (raw) and 5Gi (curated) to eliminate cloud provisioning fees.
 oc apply -f demo/k8s/02_persistent_volumes.yaml
 
 # 4. Deploy the runtime triage policy ConfigMap
 oc apply -f demo/k8s/03_triage_configmap.yaml
 ```
 
-> **Decoupled Storage Architecture:**  
-> The Deployment (`04_triage_deployment.yaml`) and Simulator (`05_simulator_job.yaml`) are completely decoupled from storage backends. They strictly reference `claimName: raw-ingest-pvc` and `claimName: gds-curated-pvc`. To switch from on-prem NetApp to AWS, Azure, or GCP, you only edit `02_persistent_volumes.yaml` without touching the application manifests.
+> **Decoupled Storage Architecture & Cloud vs. On-Prem NetApp:**  
+> * **Zero Application Coupling:** The Deployment (`04_triage_deployment.yaml`) and Simulator (`05_simulator_job.yaml`) reference only the logical names `raw-ingest-pvc` and `gds-curated-pvc`. They run identically whether backed by NetApp ONTAP, AWS EFS, Azure Files, or GCP Filestore.
+> * **Cloud Public Demos:** Cloud OpenShift clusters (ROSA, ARO, GCP) can run the demo immediately with zero NetApp dependencies. Snapshots are handled via native cloud VolumeSnapshotClasses (e.g., AWS EBS/EFS or Azure Backup).
+> * **Production Operational Note ($N \ge 150$ Trucks):** While cloud-native RWX (EFS / Azure Files) easily satisfies this 100 MB demo, high-throughput industrial mining cells (30–50 TB/day uncompressed) require NetApp ONTAP AFF/FAS NVMe/NFS arrays with 1MB rsize/wsize mount tuning and hardware SnapMirror replication to sustain 100 GbE line-rate optical wireless docking within the 240-second berth occupancy window.
 
 Verify storage bindings:
 ```bash

@@ -4,18 +4,21 @@
 #   - raw-ingest-pvc
 #   - gds-curated-pvc
 #
+# CLOUD & ON-PREM PORTABILITY:
+# By default, 'storageClassName' is omitted below so Kubernetes automatically binds to your
+# cluster's default StorageClass (e.g. AWS GP3/EFS on ROSA, Azure Disk/Files on ARO, or on-prem).
+#
+# If you wish to target a specific StorageClass, uncomment 'storageClassName' and set:
+#   - NetApp ONTAP / Astra Trident (On-prem / Cloud Volumes ONTAP / AWS FSx): "ontap-nas"
+#   - AWS ROSA / EFS CSI: "efs-sc"
+#   - Azure ARO / Azure Files: "azurefile-csi"
+#   - GCP OCP / Filestore: "standard-rwx"
+#
 # SIZING NOTE FOR CLOUD ENVIRONMENTS:
 # Default sizing is set to a lean, cloud-cost-optimized allocation (10Gi raw / 5Gi curated).
 # This comfortably handles multiple 100-event demo runs (~105 MB raw, ~3 MB curated)
 # without incurring expensive 100s of GiB cloud provisioning fees.
-#
-# STORAGE CLASS CONFIGURATION:
-# Change 'storageClassName' below to match your target environment:
-#   - NetApp ONTAP / Trident (On-prem / Cloud Volumes ONTAP / AWS FSx): "ontap-nas"
-#   - OpenShift on AWS (ROSA / EFS CSI): "efs-sc"
-#   - OpenShift on Azure (ARO / Azure Files): "azurefile-csi"
-#   - OpenShift on GCP (GCP Filestore): "standard-rwx"
-#   - Cluster Default (omitting storageClassName uses the cluster's default StorageClass)
+# (Production 10-truck haul cells deploy 30–50 TB/day rolling NVMe rings on NetApp AFF/FAS).
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -30,7 +33,7 @@ metadata:
 spec:
   accessModes:
     - ReadWriteMany
-  storageClassName: ontap-nas
+  # storageClassName: ontap-nas  # Uncomment to bind to NetApp Trident explicitly
   resources:
     requests:
       storage: 10Gi
@@ -49,7 +52,7 @@ metadata:
 spec:
   accessModes:
     - ReadWriteMany
-  storageClassName: ontap-nas
+  # storageClassName: ontap-nas  # Uncomment to bind to NetApp Trident explicitly
   resources:
     requests:
       storage: 5Gi

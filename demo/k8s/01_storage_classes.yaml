@@ -1,5 +1,13 @@
-# NetApp Astra Trident Storage Configuration
-# Requires Astra Trident CSI operator installed in cluster (namespace: trident)
+# ==============================================================================
+# OPTIONAL: NetApp Astra Trident Storage Configuration
+# ==============================================================================
+# Apply this file ONLY if your cluster has the NetApp Astra Trident CSI Operator
+# installed and is connected to a NetApp ONTAP storage system (on-prem AFF/FAS,
+# Cloud Volumes ONTAP, or AWS FSx for NetApp ONTAP).
+#
+# FOR PUBLIC CLOUD OPENSHIFT (AWS ROSA, Azure ARO, GCP OCP):
+# SKIP THIS FILE COMPLETELY. Proceed directly to 02_persistent_volumes.yaml.
+# ==============================================================================
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
