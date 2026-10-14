@@ -17,12 +17,16 @@ COPY triage_engine/ ./triage_engine/
 COPY simulator/ ./simulator/
 
 # Support OpenShift arbitrary UID restricted SCC (group 0 write access)
+# Pre-seed /tmp/healthy so container passes initial healthcheck prior to process start
 RUN mkdir -p /var/cache/usearch /tmp && \
+    touch /tmp/healthy && \
     chgrp -R 0 /app /var/cache/usearch /tmp && \
     chmod -R g=u /app /var/cache/usearch /tmp && \
     chmod -R g+rwX /app /var/cache/usearch /tmp
 
-USER 1001
+USER 1001:0
+
+VOLUME ["/var/cache/usearch", "/tmp"]
 
 EXPOSE 8080
 

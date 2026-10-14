@@ -102,11 +102,11 @@ class ConfigWatcher:
             mtime = os.path.getmtime(self.config_path)
             if mtime != self._last_mtime:
                 with open(self.config_path, "r") as f:
-                    data = yaml.safe_load(f)
+                    data = yaml.safe_load(f) or {}
                 self.policy = TriagePolicy(**data)
                 self._last_mtime = mtime
                 logger.info(f"Loaded triage policy v{self.policy.version} for {self.policy.cell_id}")
                 return True
         except Exception as e:
-            logger.error(f"Error loading config from {self.config_path}: {e}")
+            logger.error(f"Error loading config from {self.config_path}: {e}", exc_info=True)
         return False

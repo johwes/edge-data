@@ -140,16 +140,19 @@ If any filter flags a candidate snippet, it enters fleet deduplication:
 ### 3.4 Stage 4: Representation Reduction & Safety Exceptions (Spec 02)
 * **Temporal Slicing:** Extracts exactly $T - 30\text{s}$ pre-trigger (root cause onset) to $T + 15\text{s}$ post-trigger (stopping stabilization).
 * **Canonical Sensor Stream IDs & Frustum Pruning:**
-  * `cam_front_center_8mp`: **KEEP** (High Resolution)
-  * `lidar_128_beam_main`: **KEEP** (High Resolution, cropped to 100m nominal ODD range; 50m crop only applied under Tier 3 emergency storage shedding)
-  * `radar_4d_imaging_front`: **KEEP** (High Resolution)
-  * `vehicle_telemetry_bus`: **KEEP** (Native 100 Hz CAN/IMU)
-  * `cam_rear_perimeter_4mp`: **DROP** (Forward) / **KEEP** (Reversing)
-  * `lidar_perimeter_solid_state`: **DROP** (Forward) / **KEEP** (Reversing)
-  * `radar_perimeter_rear`: **DROP** (Forward) / **KEEP** (Reversing)
-  * `radar_blind_spot_side_left` & `radar_blind_spot_side_right`: **DROP** (Forward) / **KEEP** (Reversing)
-  * `cam_in_cabin_driver`: **DROP** (Excluded for privacy)
-* **Reversing & Hopper Maneuvering Exception:** If CAN powertrain signals reverse gear or geofencing locates the truck within a dump pocket or crusher hopper, the pruning mask dynamically flips: `cam_rear_perimeter_4mp`, `lidar_perimeter_solid_state`, `radar_perimeter_rear`, `radar_blind_spot_side_left`, and `radar_blind_spot_side_right` are promoted to **KEEP** at native resolution to prevent hopper wall collisions and articulated jackknifing, while forward auxiliary channels are decimated.
+  * `/sensors/cam_front_center_8mp`: **KEEP & DECIMATE** (30 $\rightarrow$ 10 FPS, ~35% bytes)
+  * `/sensors/cam_front_telephoto_8mp`: **KEEP & DECIMATE** (Forward) / **DROP** (Reversing)
+  * `/sensors/lidar_128_beam_main`: **KEEP & DECIMATE** (100m ODD crop, 32 $\rightarrow$ 16 bit fixed point)
+  * `/sensors/radar_front_long_range`: **KEEP** (High Resolution)
+  * `/sensors/cam_rear_perimeter_4mp`: **DROP** (Forward) / **KEEP & PROMOTE** (Reversing hopper maneuver, 80% bytes)
+  * `/sensors/lidar_perimeter_solid_state`: **DROP** (Forward) / **KEEP & PROMOTE** (Reversing)
+  * `/sensors/radar_perimeter_rear`: **DROP** (Forward) / **KEEP & PROMOTE** (Reversing)
+  * `/sensors/radar_blind_spot_side_left` & `/sensors/radar_blind_spot_side_right`: **DROP** (Forward) / **KEEP & PROMOTE** (Reversing)
+  * `/vehicle/can_bus`: **KEEP** (Native 100 Hz powertrain, steering, kinematics, and safety signals)
+  * `/perception/uncertainty`: **KEEP** (Confidence, entropy, and temporal variance metrics)
+  * `/perception/embedding_128d`: **KEEP** (Latent feature vectors for vector index querying)
+  * `/metadata`: **KEEP** (Event ID, truck ID, GPS coordinates, timestamps, tier assignment)
+* **Reversing & Hopper Maneuvering Exception:** If CAN powertrain signals reverse gear (`gear_reverse_active: true`) or geofencing locates the truck within a dump pocket or crusher hopper, the pruning mask dynamically flips: `/sensors/cam_rear_perimeter_4mp`, `/sensors/lidar_perimeter_solid_state`, `/sensors/radar_perimeter_rear`, `/sensors/radar_blind_spot_side_left`, and `/sensors/radar_blind_spot_side_right` are promoted to **KEEP** at native resolution (80% payload) to prevent hopper wall collisions and articulated jackknifing, while forward auxiliary channels are decimated.
 * **Perceptual Decimation:** Decimates camera frames from 30 FPS down to 10 FPS for archival serialization (66% volume reduction). Converts LiDAR 32-bit floats to 16-bit fixed-point coordinates (50% vertex payload reduction).
 * **Metadata Schema Emission:** Generates a standardized `gds_metadata_v2.json` record capturing software manifests, SA.45s CSAC clock telemetry (`PTP_HOLDOVER_ACTIVE`, 112 ns drift), filter scores, embedding vector, and optical dock metrics.
 

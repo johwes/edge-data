@@ -17,11 +17,11 @@ data:
       daily_ceiling_gb: 20.0
       nominal_target_gb: 7.0
       preemption_order:
-        - tier_5_statistical_anchor  # Evicted first if quota breached
-        - tier_4_campaign_targeted
+        - tier_5_anchor       # Evicted first if quota breached
+        - tier_4_campaign
         - tier_3_novelty
         - tier_2_uncertainty
-        - tier_1_forensic_safety     # Protected; uncapped, preempts lower tiers
+        - tier_1_forensic     # Protected; uncapped, preempts lower tiers
       tier_limits_gb:
         tier_1_forensic: "uncapped_preempts_lower_tiers"
         tier_2_uncertainty: 8.0
@@ -96,16 +96,16 @@ data:
       reversing_exception:
         trigger: "gear_reverse_active"
         promoted_channels:
-          - cam_rear_perimeter_4mp
-          - lidar_perimeter_solid_state
-          - radar_perimeter_rear
-          - radar_blind_spot_side_left
-          - radar_blind_spot_side_right
+          - /sensors/cam_rear_perimeter_4mp
+          - /sensors/lidar_perimeter_solid_state
+          - /sensors/radar_perimeter_rear
+          - /sensors/radar_blind_spot_side_left
+          - /sensors/radar_blind_spot_side_right
         decimated_forward_channels:
-          - cam_front_center_8mp
-          - cam_front_telephoto_8mp
-          - lidar_128_beam_main
-          - radar_front_long_range
+          - /sensors/cam_front_center_8mp
+          - /sensors/cam_front_telephoto_8mp
+          - /sensors/lidar_128_beam_main
+          - /sensors/radar_front_long_range
 
   storage_eviction_policy.yaml: |
     # Storage Capacity & Retention Eviction Policy (Spec 04 §3.1)

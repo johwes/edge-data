@@ -37,6 +37,11 @@ from .metrics import (
 
 logger = logging.getLogger("TriagePipeline")
 
+if H3_AVAILABLE:
+    logger.info(f"Uber H3 library loaded successfully (version {getattr(h3, '__version__', 'unknown')}).")
+else:
+    logger.warning("Uber H3 library not installed; spatial deduplication will rely on spherical Haversine distance.")
+
 def cosine_similarity(v1: List[float], v2: List[float]) -> float:
     if not v1 or not v2 or len(v1) != len(v2):
         return 0.0
@@ -48,7 +53,7 @@ def cosine_similarity(v1: List[float], v2: List[float]) -> float:
     return dot / (norm1 * norm2)
 
 def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Computes great-circle distance between two GPS points in meters."""
+    """Computes great-circle distance between two GPS coordinates in meters."""
     R = 6371000.0
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     delta_phi = math.radians(lat2 - lat1)
@@ -59,23 +64,50 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     return R * c
 
 def point_in_polygon(lat: float, lon: float, polygon: List[List[float]]) -> bool:
-    """Ray-casting point-in-polygon evaluation."""
+    """Ray-casting point-in-polygon evaluation with robust edge handling."""
     if not polygon or len(polygon) < 3:
         return False
     inside = False
     n = len(polygon)
-    p1lat, p1lon = polygon[0]
-    for i in range(1, n + 1):
-        p2lat, p2lon = polygon[i % n]
-        if lon > min(p1lon, p2lon):
-            if lon <= max(p1lon, p2lon):
-                if lat <= max(p1lat, p2lat):
-                    if p1lon != p2lon:
-                        xinters = (lon - p1lon) * (p2lat - p1lat) / (p2lon - p1lon) + p1lat
-                    if p1lat == p2lat or lat <= xinters:
-                        inside = not inside
-        p1lat, p1lon = p2lat, p2lon
+    for i in range(n):
+        p1lat, p1lon = polygon[i]
+        p2lat, p2lon = polygon[(i + 1) % n]
+        
+        # Exact vertex match
+        if (lat == p1lat and lon == p1lon) or (lat == p2lat and lon == p2lon):
+            return True
+            
+        if (p1lon > lon) != (p2lon > lon):
+            if p2lon != p1lon:
+                xinters = (lon - p1lon) * (p2lat - p1lat) / (p2lon - p1lon) + p1lat
+                if abs(lat - xinters) < 1e-9:
+                    return True  # Point lies directly on polygon edge
+                if lat < xinters:
+                    inside = not inside
     return inside
+
+def get_h3_index(lat: float, lon: float, res: int = 9) -> Optional[str]:
+    """Compatibility wrapper for both H3 v3 (geo_to_h3) and H3 v4 (latlng_to_cell)."""
+    if not H3_AVAILABLE:
+        return None
+    try:
+        if hasattr(h3, "latlng_to_cell"):
+            return h3.latlng_to_cell(lat, lon, res)
+        elif hasattr(h3, "geo_to_h3"):
+            return h3.geo_to_h3(lat, lon, res)
+    except Exception as err:
+        logger.debug(f"H3 indexing error for ({lat}, {lon}): {err}")
+    return None
+
+def is_signal_active(val: Any) -> bool:
+    """Strictly evaluates truthiness, preventing truthy string 'false' from firing."""
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return val > 0
+    if isinstance(val, str):
+        return val.strip().lower() in ("true", "1", "yes", "active")
+    return False
 
 # Canonical Specification 02 Channel Enums
 CANONICAL_CHANNELS = {
@@ -98,6 +130,15 @@ CANONICAL_CHANNELS = {
         "/perception/embedding_128d",
         "/metadata",
     ]
+}
+
+# Unified Canonical Tier Enums
+TIER_MAP = {
+    "TIER_1_FORENSIC": "tier_1_forensic",
+    "TIER_2_MODEL_UNCERTAINTY": "tier_2_uncertainty",
+    "TIER_3_FEATURE_NOVELTY": "tier_3_novelty",
+    "TIER_4_CAMPAIGN": "tier_4_campaign",
+    "TIER_5_ANCHOR": "tier_5_anchor",
 }
 
 class TriagePipeline:
@@ -174,7 +215,7 @@ class TriagePipeline:
         grade = can_data.get("grade_pitch_pct", 0.0)
         lat_g = abs(can_data.get("lateral_accel_g", 0.0))
         ttc = can_data.get("forward_ttc_seconds", 99.0)
-        is_reversing = can_data.get("gear_reverse_active", False) or can_data.get("reverse_gear_engaged", False)
+        is_reversing = is_signal_active(can_data.get("gear_reverse_active")) or is_signal_active(can_data.get("reverse_gear_engaged"))
 
         # ---------------------------------------------------------
         # Filter 1: Deterministic Safety & CAN Dynamics
@@ -186,17 +227,17 @@ class TriagePipeline:
             thresh_g = f1_cfg.downhill_grade_adjustment.lateral_accel_g if is_downhill else f1_cfg.baseline.lateral_accel_g
             thresh_ttc = f1_cfg.downhill_grade_adjustment.ttc_seconds if is_downhill else f1_cfg.baseline.ttc_seconds
 
-            # Dynamically read and evaluate configured safety trigger signals
+            # Dynamically read and strictly evaluate configured safety trigger signals
             f1_signals = False
             for sig in f1_cfg.trigger_signals:
-                if can_data.get(sig, False):
+                if is_signal_active(can_data.get(sig)):
                     f1_signals = True
                     break
                 # Common aliases
-                if sig == "aeb_active" and can_data.get("aeb_triggered", False):
+                if sig == "aeb_active" and is_signal_active(can_data.get("aeb_triggered")):
                     f1_signals = True
                     break
-                if sig == "abs_traction_event" and can_data.get("abs_active", False):
+                if sig == "abs_traction_event" and is_signal_active(can_data.get("abs_active")):
                     f1_signals = True
                     break
 
@@ -251,7 +292,7 @@ class TriagePipeline:
         f5_cfg = self.policy.filter_5_sampling
         f5_fired = False
         if f5_cfg.enabled:
-            is_anchor = meta.get("is_shift_anchor", False)
+            is_anchor = is_signal_active(meta.get("is_shift_anchor"))
             is_random_sample = random.random() < f5_cfg.uniform_sampling_rate
             f5_fired = is_anchor or is_random_sample
 
@@ -268,6 +309,7 @@ class TriagePipeline:
                "TIER_2_MODEL_UNCERTAINTY" if f2_fired else \
                "TIER_3_FEATURE_NOVELTY" if f3_fired else \
                "TIER_4_CAMPAIGN" if f4_fired else "TIER_5_ANCHOR"
+        tier_key = TIER_MAP[tier]
 
         # ---------------------------------------------------------
         # Filter 6: Spatiotemporal Coreset Deduplication
@@ -306,13 +348,31 @@ class TriagePipeline:
         # ---------------------------------------------------------
         # Quota Governance & Preemption Order (Specification 01 §6.4)
         # ---------------------------------------------------------
-        # Tier 1 Forensic is uncapped and preempts all lower tiers
-        # If daily quota budget is constrained, lower tiers are suppressed in order: 5 -> 4 -> 3 -> 2
+        # 1. Tier 1 Forensic is uncapped and preempts all lower tiers.
+        # 2. Check individual tier quota limit if defined as numeric float.
+        # 3. Check aggregate daily ceiling limit.
+        quota_limits = self.policy.quotas.tier_limits_gb
+        tier_limit = quota_limits.get(tier_key)
+        
+        # Check specific tier quota
+        if isinstance(tier_limit, (int, float)) and tier_limit > 0:
+            limit_bytes = tier_limit * (1024 ** 3)
+            if self.curated_tier_bytes[tier_key] >= limit_bytes:
+                logger.warning(
+                    f"[Quota] Tier limit reached for {tier_key} ({self.curated_tier_bytes[tier_key]/(1024**3):.2f} GB >= {tier_limit} GB). "
+                    f"Discarding event {event_id} under preemption policy."
+                )
+                EVENTS_DISCARDED.labels(cell_id=self.cell_id, filter_reason=f"quota_limit_{tier_key}").inc()
+                mcap_path.unlink(missing_ok=True)
+                self._update_reduction_ratio()
+                return None
+
+        # Check total daily ceiling
         daily_ceiling_bytes = self.policy.quotas.daily_ceiling_gb * (1024 ** 3)
         if self.total_curated_bytes >= daily_ceiling_bytes and tier != "TIER_1_FORENSIC":
             logger.warning(
                 f"[Quota] Daily ceiling reached ({self.total_curated_bytes/(1024**3):.2f} GB >= {self.policy.quotas.daily_ceiling_gb} GB). "
-                f"Preempting/evicting candidate {event_id} ({tier}) under preemption policy."
+                f"Preempting candidate {event_id} ({tier}) under preemption policy."
             )
             EVENTS_DISCARDED.labels(cell_id=self.cell_id, filter_reason="quota_preemption").inc()
             mcap_path.unlink(missing_ok=True)
@@ -342,8 +402,11 @@ class TriagePipeline:
             now_ns = int(time.time() * 1e9)
             meta["assigned_tier"] = tier
             meta["reversing_exception_active"] = is_reversing
-            if H3_AVAILABLE and len(gps_coords) == 2:
-                meta["h3_index_res9"] = h3.geo_to_h3(gps_coords[0], gps_coords[1], 9)
+            
+            # Compute H3 cell if available
+            h3_index = get_h3_index(gps_coords[0], gps_coords[1], res=9)
+            if h3_index:
+                meta["h3_index_res9"] = h3_index
             
             meta["triage_summary"] = {
                 "f1_fired": f1_fired,
@@ -366,14 +429,13 @@ class TriagePipeline:
                 if is_reversing:
                     # REVERSING EXCEPTION:
                     # KEEP rear and perimeter sensors at native resolution (~80% payload retained)
-                    # DECIMATE or DROP forward auxiliary streams
-                    if topic in CANONICAL_CHANNELS["reversing"] or "rear" in topic or "perimeter" in topic:
+                    # DECIMATE forward auxiliary streams
+                    if topic in CANONICAL_CHANNELS["reversing"]:
                         if topic not in channel_handles:
                             channel_handles[topic] = writer.register_channel(topic=topic, message_encoding="binary", schema_id=schema_id)
                         slice_len = int(len(raw_bytes) * 0.80)
                         writer.add_message(channel_id=channel_handles[topic], log_time=now_ns, data=raw_bytes[:slice_len], publish_time=now_ns)
                     elif topic in CANONICAL_CHANNELS["forward"]:
-                        # Forward streams decimated heavily during reverse
                         if topic not in channel_handles:
                             channel_handles[topic] = writer.register_channel(topic=topic, message_encoding="binary", schema_id=schema_id)
                         slice_len = int(len(raw_bytes) * 0.20)
@@ -382,12 +444,11 @@ class TriagePipeline:
                     # FORWARD DRIVING:
                     # KEEP & DECIMATE forward primary channels (30 -> 10 FPS, ~35% payload retained)
                     # DROP rear perimeter and blind-spot radar channels completely
-                    if topic in CANONICAL_CHANNELS["forward"] or "front" in topic or "main" in topic:
+                    if topic in CANONICAL_CHANNELS["forward"]:
                         if topic not in channel_handles:
                             channel_handles[topic] = writer.register_channel(topic=topic, message_encoding="binary", schema_id=schema_id)
                         slice_len = int(len(raw_bytes) * 0.35)
                         writer.add_message(channel_id=channel_handles[topic], log_time=now_ns, data=raw_bytes[:slice_len], publish_time=now_ns)
-                    # Rear and blind spot channels dropped in forward mode
 
             writer.finish()
 
@@ -395,7 +456,7 @@ class TriagePipeline:
 
         curated_size = curated_mcap_path.stat().st_size
         self.total_curated_bytes += curated_size
-        self.curated_tier_bytes[tier] += curated_size
+        self.curated_tier_bytes[tier_key] += curated_size
 
         BYTES_CURATED.labels(cell_id=self.cell_id).inc(curated_size)
         EVENTS_CURATED.labels(cell_id=self.cell_id, tier=tier).inc()
