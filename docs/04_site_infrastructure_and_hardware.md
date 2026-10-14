@@ -2,7 +2,7 @@
 
 **Document Version:** 2.1  
 **Status:** Approved Architecture Specification  
-**Parent Document:** [Master System Architecture & Site Infrastructure Overview](file:///home/jwesterl/Downloads/opencode/edge-data/docs/golden_data_set_architecture.md)  
+**Parent Document:** [Master System Architecture & Site Infrastructure Overview](./golden_data_set_architecture.md)  
 **Target Audience:** Hardware Engineers, Electrical & Packaging Teams, Infrastructure Operations Leads
 
 ---
