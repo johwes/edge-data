@@ -114,7 +114,7 @@ data:
     low_watermark_pct: 75
     check_interval_seconds: 30
     eviction_priority:
-      1: "tier_5_nominal"
+      1: "tier_5_anchor"
       2: "tier_4_campaign"
       3: "tier_3_novelty"
       4: "tier_2_uncertainty"
