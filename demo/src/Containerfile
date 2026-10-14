@@ -10,7 +10,11 @@ WORKDIR /app
 # Install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt && \
+    if python3 -c "import imageio_ffmpeg" 2>/dev/null; then \
+        FFMPEG_BIN=$(python3 -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())"); \
+        chmod 755 "$FFMPEG_BIN" && ln -sf "$FFMPEG_BIN" /usr/local/bin/ffmpeg; \
+    fi
 
 # Copy application source
 COPY triage_engine/ ./triage_engine/

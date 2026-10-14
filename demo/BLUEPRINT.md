@@ -138,7 +138,10 @@ If any filter flags a candidate snippet, it enters fleet deduplication:
 * **Impact:** Suppresses **60% to 80%** of redundant fleet triggers caused by static obstacles encountered by multiple trucks.
 
 ### 3.4 Stage 4: Representation Reduction & Safety Exceptions (Spec 02)
-* **Temporal Slicing:** Extracts exactly $T - 30\text{s}$ pre-trigger (root cause onset) to $T + 15\text{s}$ post-trigger (stopping stabilization).
+* **Temporal Slicing & FFmpeg Incident Video Extraction:**
+  * **MCAP Telemetry Slicing:** Extracts exactly $T - 30\text{s}$ pre-trigger (root cause onset) to $T + 15\text{s}$ post-trigger (stopping stabilization).
+  * **In-Container FFmpeg Video Slicing & Decimation:** When a safety-critical trigger fires (e.g. AEB near-miss, reversing maneuver), the triage engine invokes FFmpeg to slice an incident window $[T - 5\text{s}, T + 5\text{s}]$ (10 seconds total) from the raw camera buffer. The video stream is decimated from 30 FPS down to 10 FPS (matching Specification 02) and encoded into an open, universally playable MP4 (`mpeg4`/`yuv420p`), outputting `gds_curated_<event_id>_clip_10s_10fps.mp4` directly into `/mnt/gds_curated`. This produces an immediate, lightweight (~180 KB) video artifact playable in VLC or browser without requiring ROS2/Foxglove tooling.
+  * **Ingest Buffer Eviction:** The raw un-decimated rolling video buffer (~1.25 MB) is automatically purged from `/mnt/raw_ingest`.
 * **Canonical Sensor Stream IDs & Frustum Pruning:**
   * `/sensors/cam_front_center_8mp`: **KEEP & DECIMATE** (30 $\rightarrow$ 10 FPS, ~35% bytes)
   * `/sensors/cam_front_telephoto_8mp`: **KEEP & DECIMATE** (Forward) / **DROP** (Reversing)
@@ -176,6 +179,7 @@ If any filter flags a candidate snippet, it enters fleet deduplication:
 | **Robotics Log Serialization** | **Foxglove MCAP** (`mcap`) | Apache-2.0 | Append-only container format for multi-modal sensor streams. Enables seeking and channel extraction without loading entire files into memory. |
 | **Embedded Vector Search** | **USearch (Unum)** (`usearch` Python / C++11) | Apache-2.0 | Fast, lightweight HNSW vector index. Runs SIMD-optimized cosine distance queries on 128-D embeddings directly on edge CPU/NPU. |
 | **Spatial Indexing** | **Uber H3** (`h3`) / **Geohash2** | Apache-2.0 / MIT | Hexagonal spatial indexing for quantizing truck GPS coordinates into ~100m buckets for Filter 6 coreset matching. |
+| **Video Extraction & Decimation** | **FFmpeg** / `imageio-ffmpeg` | LGPL-2.1+ | In-container temporal extraction of incident video windows ($T-5\text{s}..T+5\text{s}$) and frame-rate decimation (30 $\rightarrow$ 10 FPS) to standalone `.mp4`. |
 | **Microservice Runtime** | **Python 3.11+** / **FastAPI** | PSF / MIT | Event-driven triage worker and mock telemetry generator. |
 | **Container Base Image** | **Red Hat Universal Base Image 9 (UBI 9 Minimal)** | Red Hat UBI EULA | Hardened enterprise container base image optimized for OpenShift workloads. |
 | **Storage Orchestration** | **NetApp Astra Trident CSI** | Apache-2.0 | Open-source Kubernetes CSI driver dynamically provisioning NetApp ONTAP PersistentVolumes and VolumeSnapshots. |

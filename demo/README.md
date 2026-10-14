@@ -153,10 +153,29 @@ Navigate to **Observe $\rightarrow$ Metrics** in the OpenShift Web Console and q
 * `edge_triage_events_curated_total` $\rightarrow$ Breaks down curated events by tier (`tier="TIER_1_FORENSIC"`, etc.).
 * `edge_triage_dedup_suppressions_total` $\rightarrow$ Counts redundant events eliminated by Filter 6.
 
-#### 3. Inspect Curated NetApp Persistent Storage
-Verify that curated Golden Data Set packages exist on the persistent storage volume:
+#### 3. Inspect Curated Persistent Storage
+Verify that curated Golden Data Set packages and incident video clips exist on the storage volume:
 ```bash
 oc exec -n edge-triage deploy/edge-triage-worker -- ls -lh /mnt/gds_curated
+```
+
+#### 4. Playback Extracted Incident Video Clips (FFmpeg In-Container Extraction)
+When safety-critical events fire (e.g. `EVT_F1_AEB_DOWNHILL_001` or `EVT_REVERSING_HOPPER_MANEUVER_006`), the triage engine triggers in-container FFmpeg temporal extraction:
+- Slices the exact 10-second temporal window ($T - 5\text{s}$ to $T + 5\text{s}$) centered on the telemetry trigger timestamp.
+- Decimates camera frame rate from 30 FPS down to 10 FPS (matching Specification 02), slashing raw video size from ~1.25 MB to ~180 KB.
+- Emits a standalone, standard `.mp4` video clip into `/mnt/gds_curated` playable anywhere without ROS2/Foxglove tools.
+- Automatically purges the un-decimated rolling video buffer from `/mnt/raw_ingest`.
+
+Fetch and play the extracted incident video clip on your local machine:
+```bash
+# Get the triage worker pod name
+WORKER_POD=$(oc get pods -n edge-triage -l app.kubernetes.io/component=triage-worker -o jsonpath='{.items[0].metadata.name}')
+
+# Copy the extracted 10s clip from the container volume to your workstation
+oc cp -n edge-triage ${WORKER_POD}:/mnt/gds_curated/gds_curated_EVT_F1_AEB_DOWNHILL_001_clip_10s_10fps.mp4 ./aeb_incident_10fps.mp4
+
+# Play immediately in VLC, mpv, or open directly in Chrome/Safari/Firefox
+vlc ./aeb_incident_10fps.mp4
 ```
 
 ---

@@ -2,8 +2,11 @@ import os
 import time
 import json
 import random
+import shutil
 import logging
+import subprocess
 from pathlib import Path
+from typing import Optional
 from mcap.writer import Writer
 
 logging.basicConfig(
@@ -27,6 +30,46 @@ CANONICAL_SPEC02_SENSOR_TOPICS = [
     "/sensors/radar_blind_spot_side_right",
 ]
 
+def find_ffmpeg_executable() -> Optional[str]:
+    """Finds FFmpeg executable via PATH or imageio-ffmpeg bundled binary."""
+    exe = shutil.which("ffmpeg")
+    if exe:
+        return exe
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
+
+def generate_synthetic_video_stream(output_path: Path, duration_sec: int = 30) -> bool:
+    """Generates a synthetic rolling 30 FPS camera video stream using FFmpeg testsrc."""
+    ffmpeg_exe = find_ffmpeg_executable()
+    if not ffmpeg_exe:
+        logger.warning("FFmpeg executable not available; skipping raw video stream generation.")
+        return False
+    tmp_path = output_path.with_suffix(".mp4.tmp")
+    cmd = [
+        ffmpeg_exe, "-y",
+        "-f", "lavfi",
+        "-i", f"testsrc=duration={duration_sec}:size=640x360:rate=30",
+        "-c:v", "mpeg4",
+        "-q:v", "5",
+        "-pix_fmt", "yuv420p",
+        str(tmp_path)
+    ]
+    try:
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        os.replace(tmp_path, output_path)
+        logger.info(
+            f"Generated rolling {duration_sec}s camera video buffer: {output_path.name} "
+            f"({output_path.stat().st_size / 1024:.1f} KB @ 30 FPS)."
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Failed to generate synthetic video stream via ffmpeg: {e}")
+        tmp_path.unlink(missing_ok=True)
+        return False
+
 def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload_kb_per_event: int = 1024):
     output_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"Generating {total_events} realistic MCAP telemetry packages into {output_dir}...")
@@ -35,7 +78,8 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
     now = time.time()
     events = []
 
-    # 1. Filter 1 Trigger: AEB Near-miss on loaded downhill haul (-9% grade)
+    # 1. Filter 1 Trigger: AEB Near-miss on loaded downhill haul (-9% grade) with rolling video buffer
+    vid_f1 = "EVT_F1_AEB_DOWNHILL_001_raw_camera_30s_30fps.mp4"
     events.append({
         "event_id": "EVT_F1_AEB_DOWNHILL_001",
         "timestamp_epoch": now - 600,
@@ -59,7 +103,9 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
         },
         "embedding": [random.uniform(-0.1, 0.1) for _ in range(128)],
         "gps": [-22.3300, 119.8100],
-        "is_shift_anchor": False
+        "is_shift_anchor": False,
+        "raw_video_filename": vid_f1,
+        "video_trigger_second": 15.0 # Event occurs at second 15 of 30
     })
 
     # 2. Filter 2 Trigger: Heavy dust cloud with unclassified obstacle detection
@@ -167,7 +213,8 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
         "is_shift_anchor": False
     })
 
-    # 6. Reversing & Dump Hopper Safety Exception (Flips channel mask to KEEP rear)
+    # 6. Reversing & Dump Hopper Safety Exception (Flips channel mask to KEEP rear) with rolling rear camera
+    vid_rev = "EVT_REVERSING_HOPPER_MANEUVER_006_raw_rear_camera_30s_30fps.mp4"
     events.append({
         "event_id": "EVT_REVERSING_HOPPER_MANEUVER_006",
         "timestamp_epoch": now - 90,
@@ -190,11 +237,12 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
         },
         "embedding": [random.uniform(-0.1, 0.1) for _ in range(128)],
         "gps": [-22.3340, 119.8140],
-        "is_shift_anchor": False
+        "is_shift_anchor": False,
+        "raw_video_filename": vid_rev,
+        "video_trigger_second": 18.0
     })
 
     # 7. Filter 4 Trigger: Campaign Geofence Entry (Tested via GPS point-in-polygon)
-    # Target polygon is [-22.3150 to -22.3220, 119.8210 to 119.8290]
     events.append({
         "event_id": "EVT_F4_CAMPAIGN_GEOFENCE_007",
         "timestamp_epoch": now - 60,
@@ -216,11 +264,11 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
             "temporal_variance_5frame": 0.005
         },
         "embedding": [random.uniform(-0.05, 0.05) for _ in range(128)],
-        "gps": [-22.3180, 119.8250], # Inside the polygon; pipeline will calculate point_in_polygon
+        "gps": [-22.3180, 119.8250], # Inside the polygon
         "is_shift_anchor": False
     })
 
-    # 8. Filter 1 Trigger: Emergency Stop & Rollover Warning (Testing F1 safety signals)
+    # 8. Filter 1 Trigger: Emergency Stop & Rollover Warning
     events.append({
         "event_id": "EVT_F1_ESTOP_ROLLOVER_008",
         "timestamp_epoch": now - 45,
@@ -299,6 +347,10 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
             "is_shift_anchor": False
         })
 
+    # Generate synthetic video files for the incident events
+    generate_synthetic_video_stream(output_dir / vid_f1, duration_sec=30)
+    generate_synthetic_video_stream(output_dir / vid_rev, duration_sec=30)
+
     # Divide the total payload evenly among the canonical sensor channels
     bytes_per_channel = int((payload_kb_per_event * 1024) / len(CANONICAL_SPEC02_SENSOR_TOPICS))
     sensor_dummy_payloads = {
@@ -336,6 +388,9 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
                 "gps_coordinates": evt["gps"],
                 "is_shift_anchor": evt["is_shift_anchor"]
             }
+            if "raw_video_filename" in evt:
+                meta["raw_video_filename"] = evt["raw_video_filename"]
+                meta["video_trigger_second"] = evt.get("video_trigger_second", 15.0)
 
             writer.add_message(channel_id=ch_can, log_time=now_ns, data=json.dumps(evt["can_data"]).encode("utf-8"), publish_time=now_ns)
             writer.add_message(channel_id=ch_unc, log_time=now_ns, data=json.dumps(evt["uncertainty"]).encode("utf-8"), publish_time=now_ns)

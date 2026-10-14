@@ -3,6 +3,8 @@ import math
 import time
 import json
 import random
+import shutil
+import subprocess
 import logging
 from pathlib import Path
 from collections import defaultdict
@@ -109,6 +111,68 @@ def is_signal_active(val: Any) -> bool:
         return val.strip().lower() in ("true", "1", "yes", "active")
     return False
 
+def find_ffmpeg_executable() -> Optional[str]:
+    """Finds FFmpeg executable via PATH or imageio-ffmpeg bundled binary."""
+    exe = shutil.which("ffmpeg")
+    if exe:
+        return exe
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
+
+def extract_video_clip(
+    raw_video_path: Path,
+    output_clip_path: Path,
+    trigger_sec: float = 15.0,
+    window_sec: float = 10.0,
+    target_fps: int = 10,
+) -> Optional[int]:
+    """
+    Extracts a temporal incident window ([trigger - window/2, trigger + window/2])
+    from a raw camera video stream and decimates to target_fps (Specification 02).
+    Returns the size of the extracted clip in bytes, or None on failure.
+    """
+    ffmpeg_exe = find_ffmpeg_executable()
+    if not ffmpeg_exe:
+        logger.warning(f"FFmpeg not found; skipping video extraction for {raw_video_path.name}")
+        return None
+
+    if not raw_video_path.exists():
+        logger.warning(f"Raw video file {raw_video_path} does not exist for extraction.")
+        return None
+
+    start_sec = max(0.0, trigger_sec - (window_sec / 2.0))
+    end_sec = start_sec + window_sec
+    tmp_clip = output_clip_path.with_suffix(".mp4.tmp")
+
+    cmd = [
+        ffmpeg_exe, "-y",
+        "-ss", f"{start_sec:.2f}",
+        "-to", f"{end_sec:.2f}",
+        "-i", str(raw_video_path),
+        "-r", str(target_fps),
+        "-c:v", "mpeg4",
+        "-q:v", "5",
+        "-pix_fmt", "yuv420p",
+        str(tmp_clip)
+    ]
+
+    try:
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        os.replace(tmp_clip, output_clip_path)
+        clip_size = output_clip_path.stat().st_size
+        logger.info(
+            f"[Video] Extracted {window_sec:.0f}s incident clip @ {target_fps} FPS: {output_clip_path.name} "
+            f"({clip_size/1024:.1f} KB, t=[{start_sec:.1f}s..{end_sec:.1f}s])."
+        )
+        return clip_size
+    except Exception as err:
+        logger.error(f"[Video] FFmpeg extraction failed for {raw_video_path.name}: {err}")
+        tmp_clip.unlink(missing_ok=True)
+        return None
+
 # Canonical Specification 02 Channel Enums
 CANONICAL_CHANNELS = {
     "forward": [
@@ -212,6 +276,21 @@ class TriagePipeline:
             return None
 
         event_id = meta.get("event_id", mcap_path.stem)
+        raw_vid_name = meta.get("raw_video_filename")
+        raw_vid_path = (mcap_path.parent / raw_vid_name) if raw_vid_name else None
+        if raw_vid_path and raw_vid_path.exists():
+            raw_vid_size = raw_vid_path.stat().st_size
+            self.total_ingested_bytes += raw_vid_size
+            BYTES_INGESTED.labels(cell_id=self.cell_id).inc(raw_vid_size)
+            file_size += raw_vid_size
+
+        def discard_event(reason: str):
+            EVENTS_DISCARDED.labels(cell_id=self.cell_id, filter_reason=reason).inc()
+            mcap_path.unlink(missing_ok=True)
+            if raw_vid_path and raw_vid_path.exists():
+                raw_vid_path.unlink(missing_ok=True)
+            self._update_reduction_ratio()
+
         grade = can_data.get("grade_pitch_pct", 0.0)
         lat_g = abs(can_data.get("lateral_accel_g", 0.0))
         ttc = can_data.get("forward_ttc_seconds", 99.0)
@@ -300,9 +379,7 @@ class TriagePipeline:
         candidate_fired = f1_fired or f2_fired or f3_fired or f4_fired or f5_fired
         if not candidate_fired:
             logger.info(f"[-] Event {event_id}: Discarded by Filters 1-5 (Nominal haul cycle).")
-            EVENTS_DISCARDED.labels(cell_id=self.cell_id, filter_reason="nominal_discard").inc()
-            mcap_path.unlink(missing_ok=True)
-            self._update_reduction_ratio()
+            discard_event("nominal_discard")
             return None
 
         tier = "TIER_1_FORENSIC" if f1_fired else \
@@ -336,9 +413,7 @@ class TriagePipeline:
                                 f"[-] Event {event_id}: Suppressed by Filter 6 (Duplicate haul @ {dist_m:.1f}m, sim: {sim:.3f})."
                             )
                             DEDUP_SUPPRESSIONS.labels(cell_id=self.cell_id).inc()
-                            EVENTS_DISCARDED.labels(cell_id=self.cell_id, filter_reason="dedup_filter6").inc()
-                            mcap_path.unlink(missing_ok=True)
-                            self._update_reduction_ratio()
+                            discard_event("dedup_filter6")
                             return None
 
             self.coreset_buffer.append((ts, coords, embedding))
@@ -362,9 +437,7 @@ class TriagePipeline:
                     f"[Quota] Tier limit reached for {tier_key} ({self.curated_tier_bytes[tier_key]/(1024**3):.2f} GB >= {tier_limit} GB). "
                     f"Discarding event {event_id} under preemption policy."
                 )
-                EVENTS_DISCARDED.labels(cell_id=self.cell_id, filter_reason=f"quota_limit_{tier_key}").inc()
-                mcap_path.unlink(missing_ok=True)
-                self._update_reduction_ratio()
+                discard_event(f"quota_limit_{tier_key}")
                 return None
 
         # Check total daily ceiling
@@ -374,9 +447,7 @@ class TriagePipeline:
                 f"[Quota] Daily ceiling reached ({self.total_curated_bytes/(1024**3):.2f} GB >= {self.policy.quotas.daily_ceiling_gb} GB). "
                 f"Preempting candidate {event_id} ({tier}) under preemption policy."
             )
-            EVENTS_DISCARDED.labels(cell_id=self.cell_id, filter_reason="quota_preemption").inc()
-            mcap_path.unlink(missing_ok=True)
-            self._update_reduction_ratio()
+            discard_event("quota_preemption")
             return None
 
         # ---------------------------------------------------------
@@ -417,6 +488,13 @@ class TriagePipeline:
                 "dedup_passed": True,
                 "reversing_promoted": is_reversing
             }
+            if raw_vid_path and raw_vid_path.exists():
+                meta["video_extraction"] = {
+                    "source_raw_video": raw_vid_name,
+                    "trigger_second": float(meta.get("video_trigger_second", 15.0)),
+                    "window_seconds": 10.0,
+                    "target_fps": 10
+                }
 
             writer.add_message(channel_id=ch_can, log_time=now_ns, data=json.dumps(can_data).encode("utf-8"), publish_time=now_ns)
             writer.add_message(channel_id=ch_unc, log_time=now_ns, data=json.dumps(uncertainty_data).encode("utf-8"), publish_time=now_ns)
@@ -454,11 +532,30 @@ class TriagePipeline:
 
         os.replace(tmp_curated_path, curated_mcap_path)
 
-        curated_size = curated_mcap_path.stat().st_size
-        self.total_curated_bytes += curated_size
-        self.curated_tier_bytes[tier_key] += curated_size
+        # Extract incident video clip if video buffer is linked
+        video_clip_bytes = 0
+        if raw_vid_path and raw_vid_path.exists():
+            trigger_sec = float(meta.get("video_trigger_second", 15.0))
+            clip_name = f"gds_curated_{event_id}_clip_10s_10fps.mp4"
+            curated_clip_path = output_dir / clip_name
+            extracted_size = extract_video_clip(
+                raw_video_path=raw_vid_path,
+                output_clip_path=curated_clip_path,
+                trigger_sec=trigger_sec,
+                window_sec=10.0,
+                target_fps=10,
+            )
+            if extracted_size:
+                video_clip_bytes = extracted_size
+            # Purge raw 30s video from ingest volume
+            raw_vid_path.unlink(missing_ok=True)
 
-        BYTES_CURATED.labels(cell_id=self.cell_id).inc(curated_size)
+        mcap_curated_size = curated_mcap_path.stat().st_size
+        total_curated_event_size = mcap_curated_size + video_clip_bytes
+        self.total_curated_bytes += total_curated_event_size
+        self.curated_tier_bytes[tier_key] += total_curated_event_size
+
+        BYTES_CURATED.labels(cell_id=self.cell_id).inc(total_curated_event_size)
         EVENTS_CURATED.labels(cell_id=self.cell_id, tier=tier).inc()
         duration = time.time() - start_time
         PROCESSING_LATENCY.labels(cell_id=self.cell_id).observe(duration)
@@ -467,8 +564,11 @@ class TriagePipeline:
         self._update_reduction_ratio()
 
         logger.info(
-            f"[Done] Curated {curated_mcap_path.name} ({curated_size/1024:.1f} KB from {file_size/1024:.1f} KB raw). "
-            f"Reduction: {(1 - curated_size/file_size)*100:.1f}%. Duration: {duration*1000:.1f}ms."
+            f"[Done] Curated {curated_mcap_path.name} "
+            f"({mcap_curated_size/1024:.1f} KB MCAP"
+            f"{f' + {video_clip_bytes/1024:.1f} KB MP4' if video_clip_bytes > 0 else ''} "
+            f"from {file_size/1024:.1f} KB raw). "
+            f"Reduction: {(1 - total_curated_event_size/file_size)*100:.1f}%. Duration: {duration*1000:.1f}ms."
         )
         return curated_mcap_path
 
