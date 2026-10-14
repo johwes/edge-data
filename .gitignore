@@ -11,3 +11,8 @@ Thumbs.db
 *.tmp
 *.log
 scratch/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
