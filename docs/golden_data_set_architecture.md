@@ -10,10 +10,10 @@
 
 ### 1.1 The Edge Data Avalanche
 Autonomous haul trucks in industrial mining operate under conditions fundamentally different from consumer passenger AVs or long-haul highway trucks. A single Class-8 equivalent ultra-class autonomous haul truck (e.g., Cat 797F, Komatsu 930E) generates between **1.5 TB and 2.5 TB of multi-modal telemetry per 12-hour shift** (3.0 to 5.0 TB/day/truck):
-* **High-Rate Vision:** 4 to 8 high-resolution cameras (8MP @ 10–30 FPS, raw or lightly compressed Bayer feeds) $\approx$ 15–25 MB/s.
-* **Dense 3D Spatial Geometry:** 2 to 4 solid-state and mechanical LiDARs (128-beam, 10–20 Hz) $\approx$ 15–25 MB/s.
-* **All-Weather 4D Radar:** 2 to 4 imaging radars (Doppler, range, azimuth, elevation) $\approx$ 2–5 MB/s.
-* **Sub-Millisecond Dynamic Bus:** IMUs, GNSS RTK, steering angles, braking pressure, engine torque, and hydraulic CAN/Ethernet buses $\approx$ 1–2 MB/s.
+* **High-Rate Vision:** 4 to 8 high-resolution cameras (8MP @ 10–30 FPS, raw or lightly compressed Bayer feeds) ≈ 15–25 MB/s.
+* **Dense 3D Spatial Geometry:** 2 to 4 solid-state and mechanical LiDARs (128-beam, 10–20 Hz) ≈ 15–25 MB/s.
+* **All-Weather 4D Radar:** 2 to 4 imaging radars (Doppler, range, azimuth, elevation) ≈ 2–5 MB/s.
+* **Sub-Millisecond Dynamic Bus:** IMUs, GNSS RTK, steering angles, braking pressure, engine torque, and hydraulic CAN/Ethernet buses ≈ 1–2 MB/s.
 
 Across an industrial fleet of **10 to 100 autonomous haulers**, daily data generation scales from **30 TB to over 500 TB per day**. Remote operations (e.g., Western Australia's Pilbara, Chile's Atacama Desert, northern Canada) lack fiber backhaul, relying on commercial Low-Earth Orbit (LEO) satellite uplinks (Starlink Business / OneWeb) constrained to **10–25 Mbps sustained uplink** per terminal.
 
@@ -142,11 +142,11 @@ flowchart TD
 
 ### 5.3 Sharded Site Topology, Optical Docking & Transport Funnel
 * **Full Specification:** [03_transport_docking_and_middleware.md](./03_transport_docking_and_middleware.md)
-* **Summary:** Mining circuits are partitioned into Crusher (burst offload, 60–90s dwell), Fuel Island (batch offload, 15–20 min dwell), and Parkup compartments. High-speed automated docking adapts the rugged pin-and-socket mechanical envelope of **SAE J3105/3** to house expanded-beam optical ferrules delivering nominal 5–10 Gbps with high-pressure air-purge nozzles, second-sourced with Free-Space Optics (VFO) and mmWave bridges. Shift-change contention is sized via an $M/M/c$ queuing model ($T_s \approx 240\text{s}$, $\lambda = 15\text{--}20\text{ trucks/hr}$), establishing that dual berths ($c=2$) clear shift bursts with $W_q \approx 2.25\text{--}3.20\text{ min}$. DDS wireless discovery storms are resolved by restricting Fast DDS to localhost loopback and bridging external links via Eclipse Zenoh (`zenoh_bridge_config.json5`).
+* **Summary:** Mining circuits are partitioned into Crusher (burst offload, 60–90s dwell), Fuel Island (batch offload, 15–20 min dwell), and Parkup compartments. High-speed automated docking adapts the rugged pin-and-socket mechanical envelope of **SAE J3105/3** to house expanded-beam optical ferrules delivering nominal 5–10 Gbps with high-pressure air-purge nozzles, second-sourced with Free-Space Optics (VFO) and mmWave bridges. Shift-change contention is sized via an M/M/c queuing model (T_s ≈ 240s, λ = 15–20 trucks/hr), establishing that dual berths (c = 2) clear shift bursts with W_q ≈ 2.25–3.20 min. DDS wireless discovery storms are resolved by restricting Fast DDS to localhost loopback and bridging external links via Eclipse Zenoh (`zenoh_bridge_config.json5`).
 
 ### 5.4 Edge Compute Pods, CSAC Atomic Clock & Storage Hardening
 * **Full Specification:** [04_site_infrastructure_and_hardware.md](./04_site_infrastructure_and_hardware.md)
-* **Summary:** On-vehicle storage mandates enterprise U.2/U.3 NVMe SSDs rated for $\ge 3$ DWPD (~70 PBW endurance for 12.8 TB; e.g., Micron 7450 MAX / Solidigm D7-P5620) with discrete tantalum Level-4 hardware PLP. To prevent sub-millimeter multi-sensor misalignment during 24-hour deep-pit GNSS outages, primary switches incorporate a **Microchip SA.45s Chip-Scale Atomic Clock (CSAC)** maintaining time drift <0.8 µs over 24 hours (<120 mW; subject to pilot validation). Modular 4U skid-mounted Edge Station Pods (IP66, closed-loop HVAC, NVIDIA GPUs) execute on-site triage and enforce a 4-tier graceful storage degradation sequence (`storage_eviction_policy.yaml`) with anti-flapping hysteresis and dwell windows. Security is hardened via AES-256 SED key unseal via HashiCorp Vault, TPM 2.0 mTLS dock authentication, and signed Ed25519 sneakernet manifests.
+* **Summary:** On-vehicle storage mandates enterprise U.2/U.3 NVMe SSDs rated for ≥ 3 DWPD (~70 PBW endurance for 12.8 TB; e.g., Micron 7450 MAX / Solidigm D7-P5620) with discrete tantalum Level-4 hardware PLP. To prevent sub-millimeter multi-sensor misalignment during 24-hour deep-pit GNSS outages, primary switches incorporate a **Microchip SA.45s Chip-Scale Atomic Clock (CSAC)** maintaining time drift <0.8 µs over 24 hours (<120 mW; subject to pilot validation). Modular 4U skid-mounted Edge Station Pods (IP66, closed-loop HVAC, NVIDIA GPUs) execute on-site triage and enforce a 4-tier graceful storage degradation sequence (`storage_eviction_policy.yaml`) with anti-flapping hysteresis and dwell windows. Security is hardened via AES-256 SED key unseal via HashiCorp Vault, TPM 2.0 mTLS dock authentication, and signed Ed25519 sneakernet manifests.
 
 ### 5.5 Vendor Reference Stack, 4D Auto-Labeling & Phased Roadmap
 * **Full Specification:** [05_commercial_landscape_and_roadmap.md](./05_commercial_landscape_and_roadmap.md)
