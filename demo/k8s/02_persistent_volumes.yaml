@@ -1,3 +1,21 @@
+# Persistent Volume Claims for Edge Data Triage Demo
+# DECOUPLED STORAGE CONTRACT:
+# The Deployment (04) and Simulator Job (05) strictly reference these PVCs by claimName:
+#   - raw-ingest-pvc
+#   - gds-curated-pvc
+#
+# SIZING NOTE FOR CLOUD ENVIRONMENTS:
+# Default sizing is set to a lean, cloud-cost-optimized allocation (10Gi raw / 5Gi curated).
+# This comfortably handles multiple 100-event demo runs (~105 MB raw, ~3 MB curated)
+# without incurring expensive 100s of GiB cloud provisioning fees.
+#
+# STORAGE CLASS CONFIGURATION:
+# Change 'storageClassName' below to match your target environment:
+#   - NetApp ONTAP / Trident (On-prem / Cloud Volumes ONTAP / AWS FSx): "ontap-nas"
+#   - OpenShift on AWS (ROSA / EFS CSI): "efs-sc"
+#   - OpenShift on Azure (ARO / Azure Files): "azurefile-csi"
+#   - OpenShift on GCP (GCP Filestore): "standard-rwx"
+#   - Cluster Default (omitting storageClassName uses the cluster's default StorageClass)
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -5,17 +23,17 @@ metadata:
   namespace: edge-triage
   labels:
     app.kubernetes.io/name: edge-data-triage
-    storage.netapp.io/tier: raw-ingest
-    scale: demo-scale-ring
+    storage.edge.io/tier: raw-ingest
+    scale: lean-cloud-demo
   annotations:
-    demo.architecture/sizing-note: "Demo allocation sized at 500Gi. Production haul cells deploy 30-50 TB/day rolling NVMe/SSD NFS ring on NetApp AFF/FAS."
+    description: "Rolling ingest ring buffer for raw multi-modal vehicle MCAP telemetry."
 spec:
   accessModes:
     - ReadWriteMany
   storageClassName: ontap-nas
   resources:
     requests:
-      storage: 500Gi
+      storage: 10Gi
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -24,14 +42,14 @@ metadata:
   namespace: edge-triage
   labels:
     app.kubernetes.io/name: edge-data-triage
-    storage.netapp.io/tier: gds-curated
-    scale: demo-curated-pool
+    storage.edge.io/tier: gds-curated
+    scale: lean-cloud-demo
   annotations:
-    demo.architecture/sizing-note: "Curated GDS output pool sized at 100Gi (~285 events @ 350MB average, providing 14-28 days edge retention prior to cloud upload)."
+    description: "Curated Golden Data Set output pool for decimated candidate events."
 spec:
   accessModes:
     - ReadWriteMany
   storageClassName: ontap-nas
   resources:
     requests:
-      storage: 100Gi
+      storage: 5Gi

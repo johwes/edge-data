@@ -51,16 +51,26 @@ Apply the namespace, RBAC, Astra Trident storage classes, and NetApp persistent 
 # 1. Create edge-triage namespace and service account
 oc apply -f demo/k8s/00_namespace.yaml
 
-# 2. Configure NetApp Astra Trident StorageClasses (NFS RWX + iSCSI RWO)
-# Note: Update managementLIF/dataLIF in 01_storage_classes.yaml to match your ONTAP SVM
+# 2. Configure StorageClass (If using NetApp ONTAP / Astra Trident)
+# Note: If deploying on public cloud (AWS EFS, Azure Files, GCP Filestore), skip this step.
 oc apply -f demo/k8s/01_storage_classes.yaml
 
-# 3. Create persistent volume claims (raw-ingest-pvc: 500Gi, gds-curated-pvc: 100Gi)
+# 3. Create Persistent Volume Claims
+# Note: Sized at a lean 10Gi (raw) and 5Gi (curated) to minimize cloud allocation costs.
+# Set storageClassName in 02_persistent_volumes.yaml to your cloud provider's RWX class:
+#   - NetApp ONTAP / Cloud Volumes ONTAP / AWS FSx: "ontap-nas"
+#   - AWS / ROSA: "efs-sc"
+#   - Azure / ARO: "azurefile-csi"
+#   - GCP: "standard-rwx"
+#   - Cluster Default: omit storageClassName to use cluster default
 oc apply -f demo/k8s/02_persistent_volumes.yaml
 
 # 4. Deploy the runtime triage policy ConfigMap
 oc apply -f demo/k8s/03_triage_configmap.yaml
 ```
+
+> **Decoupled Storage Architecture:**  
+> The Deployment (`04_triage_deployment.yaml`) and Simulator (`05_simulator_job.yaml`) are completely decoupled from storage backends. They strictly reference `claimName: raw-ingest-pvc` and `claimName: gds-curated-pvc`. To switch from on-prem NetApp to AWS, Azure, or GCP, you only edit `02_persistent_volumes.yaml` without touching the application manifests.
 
 Verify storage bindings:
 ```bash
