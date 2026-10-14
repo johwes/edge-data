@@ -1,3 +1,5 @@
+# NetApp Astra Trident Storage Configuration
+# Requires Astra Trident CSI operator installed in cluster (namespace: trident)
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
@@ -47,3 +49,35 @@ metadata:
     app.kubernetes.io/name: edge-data-triage
 driver: csi.trident.netapp.io
 deletionPolicy: Delete
+---
+# Astra Trident Backend Secret Template
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ontap-backend-secret
+  namespace: trident
+  labels:
+    app.kubernetes.io/name: edge-data-triage
+type: Opaque
+stringData:
+  username: "admin"
+  password: "NetAppPassword123!"
+---
+# Astra Trident Backend Configuration (CRD)
+apiVersion: trident.netapp.io/v1
+kind: TridentBackendConfig
+metadata:
+  name: ontap-nas-backend
+  namespace: trident
+  labels:
+    app.kubernetes.io/name: edge-data-triage
+spec:
+  version: 1
+  storageDriverName: ontap-nas
+  managementLIF: "10.240.10.101"
+  dataLIF: "10.240.10.105"
+  svm: "svm_edge_triage"
+  credentials:
+    name: ontap-backend-secret
+  storagePrefix: "edge_"
+  autoExportPolicy: true

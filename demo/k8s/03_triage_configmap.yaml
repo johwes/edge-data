@@ -21,13 +21,13 @@ data:
         - tier_4_campaign_targeted
         - tier_3_novelty
         - tier_2_uncertainty
-        - tier_1_forensic_safety     # Protected; never evicted (spills to sneakernet)
+        - tier_1_forensic_safety     # Protected; uncapped, preempts lower tiers
       tier_limits_gb:
-        tier_1: 5.0
-        tier_2: 7.0
-        tier_3: 5.0
-        tier_4: 2.0
-        tier_5: 1.0
+        tier_1_forensic: "uncapped_preempts_lower_tiers"
+        tier_2_uncertainty: 8.0
+        tier_3_novelty: 6.0
+        tier_4_campaign: 4.0
+        tier_5_anchor: 2.0
 
     # Filter 1: Deterministic Safety & CAN Dynamics
     filter_1_deterministic:
@@ -41,8 +41,9 @@ data:
         ttc_seconds: 4.5
       trigger_signals:
         - aeb_active
-        - abs_traction_event
+        - e_stop_active
         - operator_takeover
+        - abs_traction_event
         - rollover_warning
 
     # Filter 2: Perception Model Uncertainty
@@ -51,7 +52,7 @@ data:
       detection_confidence_threshold: 0.65
       shannon_entropy_threshold: 0.70
       temporal_variance_5frame_threshold: 0.04
-      # Note: Temporal variance MUST be calculated on raw 30 FPS stream prior to 10 FPS decimation
+      # Note: Temporal variance calculated on raw 30 FPS stream prior to 10 FPS decimation
 
     # Filter 3: Unsupervised Feature Novelty (Edge Vector Search)
     filter_3_novelty:
@@ -82,7 +83,7 @@ data:
     filter_6_dedup:
       enabled: true
       time_window_seconds: 7200     # 2 hours
-      spatial_radius_meters: 100.0  # H3 resolution 9 (~100m)
+      spatial_radius_meters: 100.0  # ~100m spatial radius
       cosine_similarity_min: 0.90   # Cosine distance < 0.10
       target_suppression_rate: 0.70 # 60-80% suppression of redundant candidate events
 
@@ -100,13 +101,16 @@ data:
           - cam_rear_right_surround_2mp
           - lidar_perimeter_rear_left
           - lidar_perimeter_rear_right
+          - radar_perimeter_rear
+          - radar_blind_spot_side_left
+          - radar_blind_spot_side_right
         decimated_forward_channels:
           - cam_front_telephoto_8mp
           - cam_front_left_surround_2mp
           - cam_front_right_surround_2mp
 
   storage_eviction_policy.yaml: |
-    # Storage Capacity & Retention Eviction Policy
+    # Storage Capacity & Retention Eviction Policy (Spec 04 §3.1)
     storage_pool: "raw-ingest-pvc"
     high_watermark_pct: 90
     low_watermark_pct: 75

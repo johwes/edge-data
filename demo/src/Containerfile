@@ -1,9 +1,13 @@
-FROM registry.access.redhat.com/ubi9/python-311:latest
+FROM registry.access.redhat.com/ubi9/python-311:1-88
 
-USER root
+LABEL maintainer="Edge Architecture Team" \
+      io.k8s.description="Enterprise Edge Data Triage & Deduplication Engine" \
+      io.k8s.display-name="Edge Triage Engine" \
+      io.openshift.tags="edge,triage,mcap,usearch,openshift"
+
 WORKDIR /app
 
-# Install dependencies
+# Install dependencies as unprivileged / standard python user
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
@@ -12,9 +16,10 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY triage_engine/ ./triage_engine/
 COPY simulator/ ./simulator/
 
-# Set up unprivileged user compliance (OpenShift restricted SCC)
-RUN chown -R 1001:0 /app && \
-    chmod -R g+rwX /app
+# Support OpenShift arbitrary UID restricted SCC (group 0 permissions)
+RUN chgrp -R 0 /app && \
+    chmod -R g=u /app && \
+    chmod -R g+rwX /tmp
 
 USER 1001
 
@@ -25,5 +30,8 @@ ENV PYTHONUNBUFFERED=1 \
     RAW_INGEST_PATH=/mnt/raw_ingest \
     GDS_CURATED_PATH=/mnt/gds_curated \
     METRICS_PORT=8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python3 -c "import os, sys, time; sys.exit(0 if (time.time() - os.path.getmtime('/tmp/healthy')) < 30 else 1)"
 
 CMD ["python3", "-m", "triage_engine.main"]

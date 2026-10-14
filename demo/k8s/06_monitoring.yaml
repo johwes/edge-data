@@ -1,3 +1,7 @@
+# OpenShift User Workload Monitoring configuration
+# Note: Ensure User Workload Monitoring is enabled in openshift-monitoring:
+#   oc get configmap cluster-monitoring-config -n openshift-monitoring -o yaml
+#   (data.config.yaml: enableUserWorkload: true)
 apiVersion: v1
 kind: Service
 metadata:
@@ -29,6 +33,7 @@ spec:
   endpoints:
     - port: metrics
       interval: 10s
+      scrapeTimeout: 8s
       path: /metrics
   selector:
     matchLabels:

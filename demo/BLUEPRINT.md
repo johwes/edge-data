@@ -251,35 +251,43 @@ demo/
 │
 └── k8s/                          # OpenShift & NetApp manifests
     ├── 00_namespace.yaml         # Namespace, ServiceAccount, non-root OpenShift SCC compliance
-    ├── 01_storage_classes.yaml   # NetApp ONTAP NAS (RWX) and SAN (RWO) Trident StorageClasses + SnapshotClass
+    ├── 01_storage_classes.yaml   # Trident StorageClasses, TridentBackendConfig, and Secret template
     ├── 02_persistent_volumes.yaml# Raw Ingest (500 GiB demo-scale) and Curated GDS (100 GiB) PVCs
     ├── 03_triage_configmap.yaml  # Triage quotas, thresholds, campaigns, and storage eviction policy
     ├── 04_triage_deployment.yaml # Containerized triage worker pod with probes & Prometheus port 8080
     ├── 05_simulator_job.yaml     # Benchmark fleet generator Job producing 100 MCAP test packages
     ├── 06_monitoring.yaml        # Service and OpenShift ServiceMonitor for Web Console dashboards
-    └── 07_buildconfig.yaml       # OpenShift ImageStream & BuildConfig for in-cluster builds
+    ├── 07_buildconfig.yaml       # OpenShift ImageStream & BuildConfig for in-cluster builds
+    └── 08_rhacm_governance.yaml  # RHACM Placement, ConfigurationPolicy, and PlacementBinding
 ```
 
 ### 6.1 Storage Classes & NetApp Trident Integration (`01_storage_classes.yaml`)
 * **`ontap-nas`:** Configured with `nfs` protocol (NFS v4.1, 1MB rsize/wsize) and `ReadWriteMany` (RWX) access mode, allowing the simulator job and triage worker to mount the volume concurrently.
 * **`ontap-san`:** Configured with `iscsi` protocol and `ReadWriteOnce` (RWO) for dedicated high-throughput raw buffers.
 * **`netapp-snapshot-class`:** `VolumeSnapshotClass` enabling zero-impact point-in-time snapshots for forensic audit retention.
+* **`TridentBackendConfig` & Secret:** Includes the declarative CRD and Secret template for connecting Astra Trident to the ONTAP SVM, management LIF, and data LIF so PVCs provision immediately without remaining in `Pending`.
 
 ### 6.2 In-Cluster Image Build (`07_buildconfig.yaml`)
 On OpenShift, developers do not need an external Docker Hub or Quay.io registry account. The provided `BuildConfig` builds the container directly inside the 3-node cluster:
 ```bash
 oc start-build edge-triage-builder --from-dir=demo/src --follow -n edge-triage
 ```
-This pushes `edge-triage-engine:latest` into the cluster's internal registry (`image-registry.openshift-image-registry.svc:5000/edge-triage/edge-triage-engine:latest`), which the Deployment and Simulator Job consume immediately.
+This pushes `edge-triage-engine:latest` into the cluster's internal registry (`image-registry.openshift-image-registry.svc:5000/edge-triage/edge-triage-engine:latest`), which the Deployment and Simulator Job consume immediately with `imagePullPolicy: Always` and an `ImageChange` trigger.
 
 ### 6.3 OpenShift Monitoring & Telemetry Dashboard (`06_monitoring.yaml`)
 The triage worker exports real-time metrics on port 8080 (`/metrics`), scraped automatically by OpenShift's cluster monitoring stack:
 * `edge_triage_bytes_ingested_total` vs `edge_triage_bytes_curated_total`
-* `edge_triage_reduction_percentage` (exposes live 99%+ volume reduction)
+* `edge_triage_reduction_percentage` (exposes live 98–99% volume reduction)
 * `edge_triage_events_curated_total` (labeled by `tier`)
 * `edge_triage_dedup_suppressions_total` (counts Filter 6 duplicates suppressed)
 
-### 6.4 Hot-Reloading Configuration via RHACM & Offline Resiliency
+### 6.4 RHACM Multi-Cluster Fleet Governance (`08_rhacm_governance.yaml`)
+Provides the central GitOps governance artifacts:
+* **`Placement` (`cluster.open-cluster-management.io/v1beta1`):** Selects managed edge clusters across mining sites based on environment and tier labels.
+* **`Policy` & `ConfigurationPolicy` (`policy.open-cluster-management.io/v1`):** Enforces `triage-policy` ConfigMaps cluster-wide with `remediationAction: enforce`.
+* **`PlacementBinding`:** Binds the policy to the target edge cluster placements.
+
+### 6.5 Hot-Reloading Configuration via RHACM & Offline Resiliency
 * **ConfigMap Hot-Reloading:** The triage worker does not use static environment variables or `subPath` mounts. Instead, `03_triage_configmap.yaml` is mounted as a full directory volume at `/etc/triage-config`. The Python worker monitors file modification timestamps and hot-reloads detection thresholds, campaigns, and quotas within seconds without container restarts.
 * **Satellite WAN Blackout Behavior:** If remote satellite WAN drops out, RHACM cannot reach the edge pod. The edge pod continues running deterministically using the locally cached ConfigMap and NetApp persistent storage, buffering curated GDS events locally on the 100 GiB PVC until satellite connectivity resumes.
 

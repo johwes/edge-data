@@ -19,7 +19,15 @@ class Filter1Config(BaseModel):
     enabled: bool = True
     baseline: Filter1Baseline = Field(default_factory=Filter1Baseline)
     downhill_grade_adjustment: Filter1Downhill = Field(default_factory=Filter1Downhill)
-    trigger_signals: List[str] = Field(default_factory=lambda: ["aeb_active", "operator_takeover"])
+    trigger_signals: List[str] = Field(
+        default_factory=lambda: [
+            "aeb_active",
+            "e_stop_active",
+            "operator_takeover",
+            "abs_traction_event",
+            "rollover_warning"
+        ]
+    )
 
 class Filter2Config(BaseModel):
     enabled: bool = True

@@ -6,6 +6,8 @@ metadata:
   labels:
     app.kubernetes.io/name: edge-data-triage
     app.kubernetes.io/component: triage-worker
+  annotations:
+    image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"edge-triage-engine:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"triage-worker\")].image"}]'
 spec:
   replicas: 1
   selector:
@@ -25,9 +27,8 @@ spec:
           type: RuntimeDefault
       containers:
         - name: triage-worker
-          # Use image built via OpenShift BuildConfig or local container registry
           image: image-registry.openshift-image-registry.svc:5000/edge-triage/edge-triage-engine:latest
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -71,16 +72,29 @@ spec:
             - python3
             - -m
             - triage_engine.main
+          startupProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - "import os, sys; sys.exit(0 if os.path.exists('/tmp/healthy') else 1)"
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 10
           livenessProbe:
-            httpGet:
-              path: /metrics
-              port: 8080
+            exec:
+              command:
+                - python3
+                - -c
+                - "import os, time, sys; sys.exit(0 if (time.time() - os.path.getmtime('/tmp/healthy')) < 30 else 1)"
             initialDelaySeconds: 15
-            periodSeconds: 20
+            periodSeconds: 15
           readinessProbe:
-            httpGet:
-              path: /metrics
-              port: 8080
+            exec:
+              command:
+                - python3
+                - -c
+                - "import os, time, sys; sys.exit(0 if (time.time() - os.path.getmtime('/tmp/healthy')) < 30 else 1)"
             initialDelaySeconds: 5
             periodSeconds: 10
       volumes:

@@ -1,0 +1,82 @@
+# Red Hat Advanced Cluster Management (RHACM) Governance & GitOps Policy
+# Deployed on the RHACM Central Hub Cluster to manage and enforce edge triage policies
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: Placement
+metadata:
+  name: edge-mining-clusters
+  namespace: open-cluster-management-global-set
+  labels:
+    app.kubernetes.io/name: edge-data-triage
+spec:
+  numberOfClusters: 10
+  predicates:
+    - requiredClusterSelector:
+        labelSelector:
+          matchExpressions:
+            - key: environment
+              operator: In
+              values: ["edge"]
+            - key: industry
+              operator: In
+              values: ["mining-haulage"]
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: Policy
+metadata:
+  name: edge-triage-policy-governance
+  namespace: open-cluster-management-global-set
+  labels:
+    app.kubernetes.io/name: edge-data-triage
+  annotations:
+    policy.open-cluster-management.io/standards: Mining Operational Safety
+    policy.open-cluster-management.io/categories: Data Governance & Egress Quotas
+    policy.open-cluster-management.io/controls: Dynamic Fleet Data Triage
+spec:
+  remediationAction: enforce
+  disabled: false
+  policy-templates:
+    - objectDefinition:
+        apiVersion: policy.open-cluster-management.io/v1
+        kind: ConfigurationPolicy
+        metadata:
+          name: edge-triage-configmap-enforcement
+        spec:
+          remediationAction: enforce
+          severity: high
+          object-templates:
+            - complianceType: musthave
+              objectDefinition:
+                apiVersion: v1
+                kind: ConfigMap
+                metadata:
+                  name: triage-policy
+                  namespace: edge-triage
+                data:
+                  triage_policy.yaml: |
+                    version: "2.0"
+                    cell_id: "pilbara-cell-04"
+                    quotas:
+                      daily_ceiling_gb: 20.0
+                      nominal_target_gb: 7.0
+                      preemption_order:
+                        - tier_5_statistical_anchor
+                        - tier_4_campaign_targeted
+                        - tier_3_novelty
+                        - tier_2_uncertainty
+                        - tier_1_forensic_safety
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: PlacementBinding
+metadata:
+  name: edge-triage-policy-binding
+  namespace: open-cluster-management-global-set
+  labels:
+    app.kubernetes.io/name: edge-data-triage
+placementRef:
+  name: edge-mining-clusters
+  kind: Placement
+  apiGroup: cluster.open-cluster-management.io
+subjects:
+  - name: edge-triage-policy-governance
+    kind: Policy
+    apiGroup: policy.open-cluster-management.io

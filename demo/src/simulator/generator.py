@@ -23,7 +23,7 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
     # 1. Filter 1 Trigger: AEB Near-miss on loaded downhill haul (-9% grade)
     events.append({
         "event_id": "EVT_F1_AEB_DOWNHILL_001",
-        "timestamp_epoch": now - 300,
+        "timestamp_epoch": now - 600,
         "truck_id": "HT_402_400T",
         "can_data": {
             "lateral_accel_g": 0.34,
@@ -38,7 +38,7 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
             "temporal_variance_5frame": 0.045
         },
         "embedding": [random.uniform(-0.1, 0.1) for _ in range(128)],
-        "gps": [-22.3182, 119.8251],
+        "gps": [-22.3300, 119.8100],
         "is_shift_anchor": False,
         "inside_campaign_geofence": False
     })
@@ -46,7 +46,7 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
     # 2. Filter 2 Trigger: Heavy dust cloud with unclassified obstacle detection
     events.append({
         "event_id": "EVT_F2_DUST_UNCERTAINTY_002",
-        "timestamp_epoch": now - 240,
+        "timestamp_epoch": now - 500,
         "truck_id": "HT_405_400T",
         "can_data": {
             "lateral_accel_g": 0.12,
@@ -61,7 +61,7 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
             "temporal_variance_5frame": 0.065
         },
         "embedding": [random.uniform(-0.1, 0.1) for _ in range(128)],
-        "gps": [-22.3190, 119.8260],
+        "gps": [-22.3310, 119.8110],
         "is_shift_anchor": False,
         "inside_campaign_geofence": False
     })
@@ -70,7 +70,7 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
     novel_vector = [0.6] * 128
     events.append({
         "event_id": "EVT_F3_NOVEL_HAUL_ROAD_003",
-        "timestamp_epoch": now - 180,
+        "timestamp_epoch": now - 400,
         "truck_id": "HT_408_400T",
         "can_data": {
             "lateral_accel_g": 0.08,
@@ -85,7 +85,7 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
             "temporal_variance_5frame": 0.010
         },
         "embedding": novel_vector,
-        "gps": [-22.3201, 119.8275],
+        "gps": [-22.3320, 119.8120],
         "is_shift_anchor": False,
         "inside_campaign_geofence": False
     })
@@ -94,7 +94,7 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
     common_vector = [0.35] * 128
     events.append({
         "event_id": "EVT_F6_INTERSECTION_DUPLICATE_004A",
-        "timestamp_epoch": now - 120,
+        "timestamp_epoch": now - 300,
         "truck_id": "HT_410_400T",
         "can_data": {
             "lateral_accel_g": 0.05,
@@ -109,14 +109,14 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
             "temporal_variance_5frame": 0.042
         },
         "embedding": common_vector,
-        "gps": [-22.3210, 119.8280],
+        "gps": [-22.3330, 119.8130],
         "is_shift_anchor": False,
         "inside_campaign_geofence": False
     })
 
     events.append({
         "event_id": "EVT_F6_INTERSECTION_DUPLICATE_004B",
-        "timestamp_epoch": now - 60,
+        "timestamp_epoch": now - 120, # 180s later (< 7200s window)
         "truck_id": "HT_412_400T",
         "can_data": {
             "lateral_accel_g": 0.05,
@@ -131,14 +131,60 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
             "temporal_variance_5frame": 0.041
         },
         "embedding": common_vector,
-        "gps": [-22.3211, 119.8281], # ~15m away
+        "gps": [-22.3331, 119.8131], # ~15m away (< 100m radius)
         "is_shift_anchor": False,
         "inside_campaign_geofence": False
     })
 
-    # 6. Filter 5 Trigger: Mandatory Shift Anchor
+    # 6. Reversing & Dump Hopper Safety Exception
     events.append({
-        "event_id": "EVT_F5_MANDATORY_SHIFT_ANCHOR_005",
+        "event_id": "EVT_REVERSING_HOPPER_MANEUVER_006",
+        "timestamp_epoch": now - 90,
+        "truck_id": "HT_415_400T",
+        "can_data": {
+            "lateral_accel_g": 0.24, # triggers F1 downhill threshold
+            "forward_ttc_seconds": 4.0,
+            "grade_pitch_pct": -8.5,
+            "aeb_triggered": False,
+            "gear_reverse_active": True # Reversing exception flips channel mask!
+        },
+        "uncertainty": {
+            "detection_confidence": 0.70,
+            "shannon_entropy": 0.50,
+            "temporal_variance_5frame": 0.02
+        },
+        "embedding": [random.uniform(-0.1, 0.1) for _ in range(128)],
+        "gps": [-22.3340, 119.8140],
+        "is_shift_anchor": False,
+        "inside_campaign_geofence": False
+    })
+
+    # 7. Filter 4 Trigger: Campaign Geofence Entry (inside polygon [-22.315 to -22.322, 119.821 to 119.829])
+    events.append({
+        "event_id": "EVT_F4_CAMPAIGN_GEOFENCE_007",
+        "timestamp_epoch": now - 60,
+        "truck_id": "HT_418_400T",
+        "can_data": {
+            "lateral_accel_g": 0.05,
+            "forward_ttc_seconds": 15.0,
+            "grade_pitch_pct": 1.0,
+            "aeb_triggered": False,
+            "gear_reverse_active": False
+        },
+        "uncertainty": {
+            "detection_confidence": 0.90,
+            "shannon_entropy": 0.15,
+            "temporal_variance_5frame": 0.005
+        },
+        "embedding": [random.uniform(-0.05, 0.05) for _ in range(128)],
+        "gps": [-22.3180, 119.8250], # Strictly inside campaign polygon!
+        "is_shift_anchor": False,
+        "inside_campaign_geofence": True
+    })
+
+    # 8. Filter 5 Trigger: Mandatory Shift Anchor
+    events.append({
+        "event_id": "EVT_F5_MANDATORY_SHIFT_ANCHOR_008",
         "timestamp_epoch": now - 30,
         "truck_id": "HT_401_400T",
         "can_data": {
@@ -154,13 +200,13 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
             "temporal_variance_5frame": 0.002
         },
         "embedding": [random.uniform(-0.02, 0.02) for _ in range(128)],
-        "gps": [-22.3160, 119.8220],
+        "gps": [-22.3360, 119.8160],
         "is_shift_anchor": True,
         "inside_campaign_geofence": False
     })
 
-    # 7 to 100: Nominal Haul Segments
-    for i in range(7, total_events + 1):
+    # 9 to 100: Nominal Haul Segments
+    for i in range(9, total_events + 1):
         events.append({
             "event_id": f"EVT_NOMINAL_HAUL_{i:03d}",
             "timestamp_epoch": now - (total_events - i) * 10,
@@ -178,7 +224,7 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
                 "temporal_variance_5frame": random.uniform(0.001, 0.020)
             },
             "embedding": [random.uniform(-0.05, 0.05) for _ in range(128)],
-            "gps": [-22.3150 + random.uniform(0, 0.01), 119.8210 + random.uniform(0, 0.01)],
+            "gps": [-22.3400 + random.uniform(0, 0.01), 119.8000 + random.uniform(0, 0.01)],
             "is_shift_anchor": False,
             "inside_campaign_geofence": False
         })
@@ -187,8 +233,10 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
     dummy_sensor_bytes = os.urandom(payload_kb_per_event * 1024)
 
     for idx, evt in enumerate(events, 1):
-        mcap_file_path = output_dir / f"{evt['event_id']}.mcap"
-        with open(mcap_file_path, "wb") as f:
+        mcap_final_path = output_dir / f"{evt['event_id']}.mcap"
+        mcap_tmp_path = output_dir / f"{evt['event_id']}.mcap.tmp"
+
+        with open(mcap_tmp_path, "wb") as f:
             writer = Writer(f)
             writer.start(profile="raw-ingest-v2", library="fleet-simulator-2.0")
 
@@ -215,6 +263,9 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
             writer.add_message(channel_id=ch_meta, log_time=now_ns, data=json.dumps(meta).encode("utf-8"), publish_time=now_ns)
             writer.add_message(channel_id=ch_raw, log_time=now_ns, data=dummy_sensor_bytes, publish_time=now_ns)
             writer.finish()
+
+        # Atomic rename to prevent partial-write race conditions
+        os.replace(mcap_tmp_path, mcap_final_path)
 
         if idx % 20 == 0 or idx == len(events):
             logger.info(f"Generated {idx}/{len(events)} MCAP telemetry files...")

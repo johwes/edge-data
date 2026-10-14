@@ -7,6 +7,8 @@ metadata:
     app.kubernetes.io/name: edge-data-triage
     app.kubernetes.io/component: simulator
 spec:
+  ttlSecondsAfterFinished: 300
+  activeDeadlineSeconds: 600
   backoffLimit: 2
   template:
     metadata:
@@ -23,7 +25,7 @@ spec:
       containers:
         - name: simulator
           image: image-registry.openshift-image-registry.svc:5000/edge-triage/edge-triage-engine:latest
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
