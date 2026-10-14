@@ -7,7 +7,7 @@ LABEL maintainer="Edge Architecture Team" \
 
 WORKDIR /app
 
-# Install dependencies as unprivileged / standard python user
+# Install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
@@ -16,10 +16,11 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY triage_engine/ ./triage_engine/
 COPY simulator/ ./simulator/
 
-# Support OpenShift arbitrary UID restricted SCC (group 0 permissions)
-RUN chgrp -R 0 /app && \
-    chmod -R g=u /app && \
-    chmod -R g+rwX /tmp
+# Support OpenShift arbitrary UID restricted SCC (group 0 write access)
+RUN mkdir -p /var/cache/usearch /tmp && \
+    chgrp -R 0 /app /var/cache/usearch /tmp && \
+    chmod -R g=u /app /var/cache/usearch /tmp && \
+    chmod -R g+rwX /app /var/cache/usearch /tmp
 
 USER 1001
 

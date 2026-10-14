@@ -5,6 +5,7 @@ import json
 import random
 import logging
 from pathlib import Path
+from collections import defaultdict
 from typing import Optional, Dict, Any, List, Tuple
 
 try:
@@ -12,6 +13,12 @@ try:
     USEARCH_AVAILABLE = True
 except ImportError:
     USEARCH_AVAILABLE = False
+
+try:
+    import h3
+    H3_AVAILABLE = True
+except ImportError:
+    H3_AVAILABLE = False
 
 from mcap.reader import make_reader
 from mcap.writer import Writer
@@ -40,8 +47,19 @@ def cosine_similarity(v1: List[float], v2: List[float]) -> float:
         return 0.0
     return dot / (norm1 * norm2)
 
+def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Computes great-circle distance between two GPS points in meters."""
+    R = 6371000.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    delta_phi = math.radians(lat2 - lat1)
+    delta_lambda = math.radians(lon2 - lon1)
+    a = (math.sin(delta_phi / 2.0) ** 2 +
+         math.cos(phi1) * math.cos(phi2) * (math.sin(delta_lambda / 2.0) ** 2))
+    c = 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
+    return R * c
+
 def point_in_polygon(lat: float, lon: float, polygon: List[List[float]]) -> bool:
-    """Ray casting point-in-polygon algorithm."""
+    """Ray-casting point-in-polygon evaluation."""
     if not polygon or len(polygon) < 3:
         return False
     inside = False
@@ -59,19 +77,42 @@ def point_in_polygon(lat: float, lon: float, polygon: List[List[float]]) -> bool
         p1lat, p1lon = p2lat, p2lon
     return inside
 
+# Canonical Specification 02 Channel Enums
+CANONICAL_CHANNELS = {
+    "forward": [
+        "/sensors/cam_front_center_8mp",
+        "/sensors/cam_front_telephoto_8mp",
+        "/sensors/lidar_128_beam_main",
+        "/sensors/radar_front_long_range",
+    ],
+    "reversing": [
+        "/sensors/cam_rear_perimeter_4mp",
+        "/sensors/lidar_perimeter_solid_state",
+        "/sensors/radar_perimeter_rear",
+        "/sensors/radar_blind_spot_side_left",
+        "/sensors/radar_blind_spot_side_right",
+    ],
+    "telemetry": [
+        "/vehicle/can_bus",
+        "/perception/uncertainty",
+        "/perception/embedding_128d",
+        "/metadata",
+    ]
+}
+
 class TriagePipeline:
     def __init__(self, policy: TriagePolicy):
         self.policy = policy
         self.cell_id = policy.cell_id
         self.total_ingested_bytes = 0
         self.total_curated_bytes = 0
+        self.curated_tier_bytes: Dict[str, int] = defaultdict(int)
         
         # Initialize USearch CPU-accelerated index (128-D Cosine)
         self.vector_dim = policy.filter_3_novelty.vector_dim
         if USEARCH_AVAILABLE:
             logger.info("Initializing USearch SIMD-accelerated HNSW index on CPU (128-D, metric=cos)...")
             self.usearch_index = Index(ndim=self.vector_dim, metric="cos")
-            # Populate with a synthetic nominal baseline centroid to prevent initial cold-start instability
             self.usearch_index.add(0, [0.0] * self.vector_dim)
         else:
             logger.warning("USearch library not available; using native Python vector search fallback.")
@@ -86,7 +127,6 @@ class TriagePipeline:
         self.cell_id = new_policy.cell_id
 
     def process_mcap_file(self, mcap_path: Path, output_dir: Path) -> Optional[Path]:
-        # Ignore partial writes and non-mcap files
         if mcap_path.name.endswith(".tmp") or not mcap_path.name.endswith(".mcap"):
             return None
 
@@ -94,7 +134,6 @@ class TriagePipeline:
         try:
             file_size = mcap_path.stat().st_size
         except OSError:
-            # File may have been unlinked or moved
             return None
 
         self.total_ingested_bytes += file_size
@@ -108,23 +147,23 @@ class TriagePipeline:
         uncertainty_data: Dict[str, Any] = {}
         embedding: List[float] = []
         meta: Dict[str, Any] = {}
-        payload_messages = []
+        sensor_messages: Dict[str, bytes] = {}
 
         try:
             with open(mcap_path, "rb") as f:
                 reader = make_reader(f)
                 for schema, channel, message in reader.iter_messages():
-                    if channel.topic == "/vehicle/can_bus":
+                    topic = channel.topic
+                    if topic == "/vehicle/can_bus":
                         can_data = json.loads(message.data.decode("utf-8"))
-                    elif channel.topic == "/perception/uncertainty":
+                    elif topic == "/perception/uncertainty":
                         uncertainty_data = json.loads(message.data.decode("utf-8"))
-                    elif channel.topic == "/perception/embedding_128d":
+                    elif topic == "/perception/embedding_128d":
                         embedding = json.loads(message.data.decode("utf-8"))
-                    elif channel.topic == "/metadata":
+                    elif topic == "/metadata":
                         meta = json.loads(message.data.decode("utf-8"))
                     else:
-                        # Raw sensor streams (e.g. /sensors/camera_compressed, /sensors/lidar_raw)
-                        payload_messages.append((channel.topic, message.data))
+                        sensor_messages[topic] = message.data
         except Exception as e:
             logger.error(f"Corrupt or unreadable MCAP file {mcap_path}: {e}")
             EVENTS_DISCARDED.labels(cell_id=self.cell_id, filter_reason="corrupt_mcap").inc()
@@ -135,11 +174,6 @@ class TriagePipeline:
         grade = can_data.get("grade_pitch_pct", 0.0)
         lat_g = abs(can_data.get("lateral_accel_g", 0.0))
         ttc = can_data.get("forward_ttc_seconds", 99.0)
-        aeb = can_data.get("aeb_triggered", False)
-        e_stop = can_data.get("e_stop_active", False)
-        takeover = can_data.get("operator_takeover", False)
-        abs_active = can_data.get("abs_traction_event", False)
-        rollover = can_data.get("rollover_warning", False)
         is_reversing = can_data.get("gear_reverse_active", False) or can_data.get("reverse_gear_engaged", False)
 
         # ---------------------------------------------------------
@@ -152,7 +186,20 @@ class TriagePipeline:
             thresh_g = f1_cfg.downhill_grade_adjustment.lateral_accel_g if is_downhill else f1_cfg.baseline.lateral_accel_g
             thresh_ttc = f1_cfg.downhill_grade_adjustment.ttc_seconds if is_downhill else f1_cfg.baseline.ttc_seconds
 
-            f1_signals = aeb or e_stop or takeover or abs_active or rollover
+            # Dynamically read and evaluate configured safety trigger signals
+            f1_signals = False
+            for sig in f1_cfg.trigger_signals:
+                if can_data.get(sig, False):
+                    f1_signals = True
+                    break
+                # Common aliases
+                if sig == "aeb_active" and can_data.get("aeb_triggered", False):
+                    f1_signals = True
+                    break
+                if sig == "abs_traction_event" and can_data.get("abs_active", False):
+                    f1_signals = True
+                    break
+
             f1_kinematics = (lat_g >= thresh_g) or (ttc <= thresh_ttc)
             f1_fired = f1_signals or f1_kinematics
 
@@ -194,11 +241,9 @@ class TriagePipeline:
         f4_cfg = self.policy.filter_4_geofence
         f4_fired = False
         gps_coords = meta.get("gps_coordinates", [0.0, 0.0])
-        if f4_cfg.enabled:
-            inside_geo = meta.get("inside_campaign_geofence", False)
-            if not inside_geo and f4_cfg.polygon_coordinates and len(gps_coords) == 2:
-                inside_geo = point_in_polygon(gps_coords[0], gps_coords[1], f4_cfg.polygon_coordinates)
-            f4_fired = inside_geo
+        if f4_cfg.enabled and f4_cfg.polygon_coordinates and len(gps_coords) == 2:
+            # Actively evaluate ray-casting point-in-polygon
+            f4_fired = point_in_polygon(gps_coords[0], gps_coords[1], f4_cfg.polygon_coordinates)
 
         # ---------------------------------------------------------
         # Filter 5: Statistical & Anchor Sampling
@@ -238,12 +283,10 @@ class TriagePipeline:
                 (t, c, e) for (t, c, e) in self.coreset_buffer if (ts - t) <= window_sec
             ]
             
-            # Check against recent items within the actual 7200s window and 100 meters
+            # Spherical Haversine distance comparison
             for prev_ts, prev_coords, prev_emb in self.coreset_buffer:
                 if abs(ts - prev_ts) <= window_sec:
-                    dist_m = math.sqrt(
-                        (coords[0] - prev_coords[0])**2 + (coords[1] - prev_coords[1])**2
-                    ) * 111000
+                    dist_m = haversine_distance(coords[0], coords[1], prev_coords[0], prev_coords[1])
                     if dist_m <= f6_cfg.spatial_radius_meters:
                         sim = cosine_similarity(embedding, prev_emb)
                         if sim >= f6_cfg.cosine_similarity_min:
@@ -256,13 +299,28 @@ class TriagePipeline:
                             self._update_reduction_ratio()
                             return None
 
-            # Add to coreset buffer and USearch index
             self.coreset_buffer.append((ts, coords, embedding))
             if USEARCH_AVAILABLE and self.usearch_index is not None and embedding:
                 self.usearch_index.add(len(self.coreset_buffer), embedding)
 
         # ---------------------------------------------------------
-        # Curation & Decimation: Write Output MCAP
+        # Quota Governance & Preemption Order (Specification 01 §6.4)
+        # ---------------------------------------------------------
+        # Tier 1 Forensic is uncapped and preempts all lower tiers
+        # If daily quota budget is constrained, lower tiers are suppressed in order: 5 -> 4 -> 3 -> 2
+        daily_ceiling_bytes = self.policy.quotas.daily_ceiling_gb * (1024 ** 3)
+        if self.total_curated_bytes >= daily_ceiling_bytes and tier != "TIER_1_FORENSIC":
+            logger.warning(
+                f"[Quota] Daily ceiling reached ({self.total_curated_bytes/(1024**3):.2f} GB >= {self.policy.quotas.daily_ceiling_gb} GB). "
+                f"Preempting/evicting candidate {event_id} ({tier}) under preemption policy."
+            )
+            EVENTS_DISCARDED.labels(cell_id=self.cell_id, filter_reason="quota_preemption").inc()
+            mcap_path.unlink(missing_ok=True)
+            self._update_reduction_ratio()
+            return None
+
+        # ---------------------------------------------------------
+        # Curation & Decimation: Write Output MCAP with Spec 02 IDs
         # ---------------------------------------------------------
         logger.info(f"[+] Event {event_id}: ACCEPTED under {tier}. Curation & decimation in progress...")
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -273,28 +331,20 @@ class TriagePipeline:
             writer = Writer(out_f)
             writer.start(profile="gds-curated-v2", library="edge-triage-2.0")
 
-            # Register standard metadata & telemetry channels
             schema_id = writer.register_schema(name="gds.json", encoding="jsonschema", data=b"{}")
+            
+            # Register Telemetry Channels
             ch_can = writer.register_channel(topic="/vehicle/can_bus", message_encoding="json", schema_id=schema_id)
             ch_unc = writer.register_channel(topic="/perception/uncertainty", message_encoding="json", schema_id=schema_id)
             ch_emb = writer.register_channel(topic="/perception/embedding_128d", message_encoding="json", schema_id=schema_id)
             ch_meta = writer.register_channel(topic="/metadata", message_encoding="json", schema_id=schema_id)
-            
-            # Register payload channels
-            ch_sensor_decimated = writer.register_channel(
-                topic="/sensors/camera_decimated_10fps",
-                message_encoding="binary",
-                schema_id=schema_id
-            )
-            ch_rear_promoted = writer.register_channel(
-                topic="/sensors/rear_vision_promoted",
-                message_encoding="binary",
-                schema_id=schema_id
-            )
 
             now_ns = int(time.time() * 1e9)
             meta["assigned_tier"] = tier
             meta["reversing_exception_active"] = is_reversing
+            if H3_AVAILABLE and len(gps_coords) == 2:
+                meta["h3_index_res9"] = h3.geo_to_h3(gps_coords[0], gps_coords[1], 9)
+            
             meta["triage_summary"] = {
                 "f1_fired": f1_fired,
                 "f2_fired": f2_fired,
@@ -310,24 +360,42 @@ class TriagePipeline:
             writer.add_message(channel_id=ch_emb, log_time=now_ns, data=json.dumps(embedding).encode("utf-8"), publish_time=now_ns)
             writer.add_message(channel_id=ch_meta, log_time=now_ns, data=json.dumps(meta).encode("utf-8"), publish_time=now_ns)
 
-            # Decimate raw payloads according to Spec 02
-            for topic, raw_bytes in payload_messages:
+            # Apply Specification 02 Channel Pruning and Decimation Mask
+            channel_handles = {}
+            for topic, raw_bytes in sensor_messages.items():
                 if is_reversing:
-                    # Reversing exception: Preserve full resolution on rear feeds (~80% payload retained)
-                    slice_len = int(len(raw_bytes) * 0.80)
-                    writer.add_message(channel_id=ch_rear_promoted, log_time=now_ns, data=raw_bytes[:slice_len], publish_time=now_ns)
+                    # REVERSING EXCEPTION:
+                    # KEEP rear and perimeter sensors at native resolution (~80% payload retained)
+                    # DECIMATE or DROP forward auxiliary streams
+                    if topic in CANONICAL_CHANNELS["reversing"] or "rear" in topic or "perimeter" in topic:
+                        if topic not in channel_handles:
+                            channel_handles[topic] = writer.register_channel(topic=topic, message_encoding="binary", schema_id=schema_id)
+                        slice_len = int(len(raw_bytes) * 0.80)
+                        writer.add_message(channel_id=channel_handles[topic], log_time=now_ns, data=raw_bytes[:slice_len], publish_time=now_ns)
+                    elif topic in CANONICAL_CHANNELS["forward"]:
+                        # Forward streams decimated heavily during reverse
+                        if topic not in channel_handles:
+                            channel_handles[topic] = writer.register_channel(topic=topic, message_encoding="binary", schema_id=schema_id)
+                        slice_len = int(len(raw_bytes) * 0.20)
+                        writer.add_message(channel_id=channel_handles[topic], log_time=now_ns, data=raw_bytes[:slice_len], publish_time=now_ns)
                 else:
-                    # Standard decimation: 30 FPS -> 10 FPS decimation (~35% payload retained)
-                    slice_len = int(len(raw_bytes) * 0.35)
-                    writer.add_message(channel_id=ch_sensor_decimated, log_time=now_ns, data=raw_bytes[:slice_len], publish_time=now_ns)
+                    # FORWARD DRIVING:
+                    # KEEP & DECIMATE forward primary channels (30 -> 10 FPS, ~35% payload retained)
+                    # DROP rear perimeter and blind-spot radar channels completely
+                    if topic in CANONICAL_CHANNELS["forward"] or "front" in topic or "main" in topic:
+                        if topic not in channel_handles:
+                            channel_handles[topic] = writer.register_channel(topic=topic, message_encoding="binary", schema_id=schema_id)
+                        slice_len = int(len(raw_bytes) * 0.35)
+                        writer.add_message(channel_id=channel_handles[topic], log_time=now_ns, data=raw_bytes[:slice_len], publish_time=now_ns)
+                    # Rear and blind spot channels dropped in forward mode
 
             writer.finish()
 
-        # Atomic rename to final curated MCAP
         os.replace(tmp_curated_path, curated_mcap_path)
 
         curated_size = curated_mcap_path.stat().st_size
         self.total_curated_bytes += curated_size
+        self.curated_tier_bytes[tier] += curated_size
 
         BYTES_CURATED.labels(cell_id=self.cell_id).inc(curated_size)
         EVENTS_CURATED.labels(cell_id=self.cell_id, tier=tier).inc()
@@ -338,7 +406,8 @@ class TriagePipeline:
         self._update_reduction_ratio()
 
         logger.info(
-            f"[Done] Curated {curated_mcap_path.name} ({curated_size/1024:.1f} KB from {file_size/1024:.1f} KB raw). Duration: {duration*1000:.1f}ms."
+            f"[Done] Curated {curated_mcap_path.name} ({curated_size/1024:.1f} KB from {file_size/1024:.1f} KB raw). "
+            f"Reduction: {(1 - curated_size/file_size)*100:.1f}%. Duration: {duration*1000:.1f}ms."
         )
         return curated_mcap_path
 

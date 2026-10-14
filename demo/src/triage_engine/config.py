@@ -1,7 +1,7 @@
 import os
 import yaml
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger("TriageConfig")
@@ -63,8 +63,17 @@ class Filter6Config(BaseModel):
 class QuotaConfig(BaseModel):
     daily_ceiling_gb: float = 20.0
     nominal_target_gb: float = 7.0
-    preemption_order: List[str] = Field(default_factory=list)
-    tier_limits_gb: Dict[str, float] = Field(default_factory=dict)
+    preemption_order: List[str] = Field(
+        default_factory=lambda: [
+            "tier_5_anchor",
+            "tier_4_campaign",
+            "tier_3_novelty",
+            "tier_2_uncertainty",
+            "tier_1_forensic"
+        ]
+    )
+    # Allows both float quota limits and string descriptive tags like "uncapped_preempts_lower_tiers"
+    tier_limits_gb: Dict[str, Union[float, str, None]] = Field(default_factory=dict)
 
 class TriagePolicy(BaseModel):
     version: str = "2.0"

@@ -96,18 +96,16 @@ data:
       reversing_exception:
         trigger: "gear_reverse_active"
         promoted_channels:
-          - cam_rear_center_8mp
-          - cam_rear_left_surround_2mp
-          - cam_rear_right_surround_2mp
-          - lidar_perimeter_rear_left
-          - lidar_perimeter_rear_right
+          - cam_rear_perimeter_4mp
+          - lidar_perimeter_solid_state
           - radar_perimeter_rear
           - radar_blind_spot_side_left
           - radar_blind_spot_side_right
         decimated_forward_channels:
+          - cam_front_center_8mp
           - cam_front_telephoto_8mp
-          - cam_front_left_surround_2mp
-          - cam_front_right_surround_2mp
+          - lidar_128_beam_main
+          - radar_front_long_range
 
   storage_eviction_policy.yaml: |
     # Storage Capacity & Retention Eviction Policy (Spec 04 §3.1)

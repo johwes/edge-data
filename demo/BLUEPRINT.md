@@ -153,11 +153,16 @@ If any filter flags a candidate snippet, it enters fleet deduplication:
 * **Perceptual Decimation:** Decimates camera frames from 30 FPS down to 10 FPS for archival serialization (66% volume reduction). Converts LiDAR 32-bit floats to 16-bit fixed-point coordinates (50% vertex payload reduction).
 * **Metadata Schema Emission:** Generates a standardized `gds_metadata_v2.json` record capturing software manifests, SA.45s CSAC clock telemetry (`PTP_HOLDOVER_ACTIVE`, 112 ns drift), filter scores, embedding vector, and optical dock metrics.
 
-### 3.5 End-to-End Demo I/O Math Closure
-* **Input Volume (100 synthetic events):** 100 raw 45s events @ 1.6 to 2.7 GB unpruned = **~160 to 270 GB raw ingest**.
-* **Stage 1 & 2 Filtering:** 95 nominal events discarded (Filter 5 retains 1 nominal anchor). 5 candidate anomaly events flagged. Filter 6 deduplicates 2 repeated encounters.
-* **Stage 3 Pruning:** The remaining 3 unique anomaly events and 1 nominal anchor are pruned from ~2.0 GB down to **~240 to 810 MB each** (nominal average ~350 MB; up to ~800 MB if reverse-gear safety exception preserves rear sensors).
-* **Output Volume:** Total curated Golden Data Set volume = **~1.4 to 2.4 GB**, demonstrating a genuine **~99% data reduction** before WAN upload.
+### 3.5 End-to-End I/O Math Closure (Production Scale vs. Demo Benchmark)
+* **Production Fleet Scale:**
+  * **Input Volume (100 vehicle events):** 100 raw 45s events @ 1.6 to 2.7 GB unpruned = **~160 to 270 GB raw ingest**.
+  * **Stage 1 & 2 Filtering:** 91 nominal events discarded. 9 candidate anomaly events flagged. Filter 6 deduplicates cross-truck encounters.
+  * **Stage 3 Pruning:** Preserved candidates are decimated from ~2.0 GB down to **~240 to 810 MB each** (nominal average ~350 MB; up to ~800 MB if reverse-gear safety exception preserves rear sensors).
+  * **Output Volume:** Total curated Golden Data Set volume = **~1.4 to 2.4 GB**, achieving a **~98.6% to 99.1% data volume reduction**.
+* **Demo Benchmark Run (Calibrated for Fast Cluster Testing):**
+  * **Input Volume:** 100 synthetic MCAP packages @ 1,024 KB each = **~102.4 MB raw ingest**.
+  * **Filtering & Decimation:** 91 nominal events discarded; candidate streams pruned to ~350 KB each (and ~800 KB for reversing hopper maneuvers).
+  * **Output Volume:** Total curated volume = **~1.4 MB**, demonstrating the exact same **~98.6% bandwidth reduction** live on Prometheus gauges within seconds.
 
 ---
 
