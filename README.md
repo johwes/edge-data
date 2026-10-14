@@ -1,19 +1,25 @@
-# Autonomous Haulage Edge Data & GDS Architecture
+# Autonomous Fleet Edge Data Triage & Golden Data Set (GDS) Architecture
 
-This repository outlines the technical strategy and system architecture for managing high-volume sensor data (500 TB/day/site) across remote autonomous truck fleets in mining and industrial logistics.
+This repository outlines the technical strategy, systems architecture, and implementation blueprint for managing high-volume sensor data (500 TB/day/site) across remote autonomous vehicle fleets in mining and industrial logistics.
 
-## Key Documents
+---
 
-* **[Golden Data Set Architecture Specification](docs/golden_data_set_architecture.md)**: Comprehensive architectural specification detailing:
-  * The 5-layer edge value triage engine (Deterministic, Active Learning, Vector Embeddings, Campaigns, Stratified Sampling)
-  * The multi-tier transport hierarchy (On-Truck $\rightarrow$ Depot Wi-Fi 6 $\rightarrow$ Satellite $\rightarrow$ Sneakernet)
-  * Data reduction techniques (temporal ring buffers, frustum & channel pruning, frame decimation)
-  * Sizing and quantitative data reduction funnels (500 TB $\rightarrow$ 5 TB $\rightarrow$ <50 GB) and Cloud Cost Model ($345k/mo raw vs <$1.1k/mo curated)
-  * Standardized JSON Metadata Schema (`gds_metadata_v2.json`)
-  * Mathematical vector drift mitigation under OTA updates (Backward-Compatible Training & Zero-Shot Query Drift Compensation)
-  * Hybrid transport middleware: eProsima Fast DDS (onboard IPC) + Eclipse Zenoh (depot wireless bridging)
-  * Hardware hardening: Chip-Scale Atomic Clock (CSAC) PTP holdover, 10 Gbps robotic optical docking (SAE J3105/3 with dust purge), 3 DWPD NVMe storage
-  * Open Standards matrix (MCAP, Fast DDS, Zenoh, USearch, LanceDB, Cleanlab, ASAM OpenSCENARIO) & Commercial Vendor Landscape (Kognic, Sift, Akridata, Voxel51, AWS IoT FleetWise, Applied Intuition)
-  * Concrete configuration artifacts (`storage_eviction_policy.yaml` & `zenoh_bridge_config.json5`)
-  * 4-phase implementation roadmap and operational review alignment matrix
-  * **Comprehensive Reference Library (Section 13)**: 40 authoritative, hyperlinked industry citations and academic papers backing all financial, hardware, algorithmic, and networking claims.
+## 1. Executive Architectural Specifications
+
+The canonical system architecture is modularized into focused subsystem specifications:
+
+* **[Master Architecture & Site Infrastructure Overview](docs/golden_data_set_architecture.md)**: Master executive overview, multi-tier system topology diagram, and architectural hardening alignment table.
+* **[Specification 01: Data Filtering, Triage & Deduplication](docs/01_data_filtering_and_triage.md)**: 6-filter information entropy funnel, kinematic safety triggers, BCT/QDC latent vector drift mitigation, and daily quota allocation.
+* **[Specification 02: Data Reduction & Metadata Schema](docs/02_data_reduction_and_metadata_schema.md)**: 45s temporal ring buffering, frustum pruning, reverse-gear safety exceptions, and the standardized `gds_metadata_v2.json` schema.
+* **[Specification 03: Edge Transport, Docking & Middleware](docs/03_transport_docking_and_middleware.md)**: Sharded pit topologies (Crusher vs. Fuel Island), automated optical docking (SAE J3105/3 mechanical envelope reuse), shift-change M/M/c queuing models, and Eclipse Zenoh middleware.
+* **[Specification 04: Site Infrastructure & Hardware Hardening](docs/04_site_infrastructure_and_hardware.md)**: 4U skid-mounted Edge Station Pods, Microchip SA.45s CSAC atomic clock PTP holdover (<0.8 µs/24h), 3 DWPD enterprise NVMe storage lifecycle (`storage_eviction_policy.yaml`), and Vault/TPM security controls.
+* **[Specification 05: Commercial Landscape, Tooling Evaluation & Roadmap](docs/05_commercial_landscape_and_roadmap.md)**: 4D world modeling (EmerNeRF/Street Gaussians), commercial vendor matrix, 4-phase deployment plan, pilot commissioning punch-list, and 40 authoritative references.
+
+---
+
+## 2. Practical Implementation Blueprint (PoC / Demo)
+
+* **[Edge Data Triage & Deduplication Blueprint](demo/BLUEPRINT.md)**: A concrete, actionable implementation blueprint bridging Specifications 01 and 02 into a runnable "Hello World" application designed for:
+  * **Red Hat OpenShift (SNO / MicroShift)** at the edge.
+  * **NetApp Storage (ONTAP / Astra Trident CSI)** for high-throughput raw ingest, local snapshots, and tiering.
+  * **Red Hat Advanced Cluster Management (RHACM)** for centralized GitOps policy distribution, daily quota governance, and multi-cluster deployment.
