@@ -22,7 +22,8 @@ spec:
           type: RuntimeDefault
       containers:
         - name: simulator
-          image: registry.access.redhat.com/ubi9/python-311:latest
+          image: image-registry.openshift-image-registry.svc:5000/edge-triage/edge-triage-engine:latest
+          imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -45,182 +46,14 @@ spec:
               value: "1"
             - name: RAW_INGEST_PATH
               value: "/mnt/raw_ingest"
+            - name: SIMULATOR_EVENT_COUNT
+              value: "100"
+            - name: SIMULATOR_PAYLOAD_KB
+              value: "1024"
           command:
             - python3
-            - -c
-            - |
-              import os, sys, time, json, random
-              from pathlib import Path
-
-              target_dir = Path(os.getenv("RAW_INGEST_PATH", "/mnt/raw_ingest")) / "incoming"
-              target_dir.mkdir(parents=True, exist_ok=True)
-              print(f"[Simulator] Generating 100 synthetic haul telemetry events into {target_dir}...")
-
-              now = time.time()
-              events = []
-
-              # Event 1: Filter 1 Trigger - AEB near-miss on loaded downhill haul (-9% grade)
-              events.append({
-                  "event_id": "EVT_F1_AEB_DOWNHILL_001",
-                  "timestamp_epoch": now - 300,
-                  "truck_id": "HT_402_400T",
-                  "can_telemetry": {
-                      "lateral_accel_g": 0.34,
-                      "forward_ttc_seconds": 2.6,
-                      "grade_pitch_pct": -9.0,
-                      "aeb_triggered": True,
-                      "gear_reverse_active": False
-                  },
-                  "model_confidence": 0.52,
-                  "model_entropy": 0.78,
-                  "temporal_variance_5frame": 0.045,
-                  "cosine_distance_to_baseline": 0.32,
-                  "gps_coordinates": [-22.3182, 119.8251],
-                  "embedding_128d": [random.uniform(-0.1, 0.1) for _ in range(128)],
-                  "inside_campaign_geofence": False,
-                  "is_shift_anchor": False
-              })
-
-              # Event 2: Filter 2 Trigger - Heavy dust / unclassified obstacle with high uncertainty
-              events.append({
-                  "event_id": "EVT_F2_DUST_UNCERTAINTY_002",
-                  "timestamp_epoch": now - 240,
-                  "truck_id": "HT_405_400T",
-                  "can_telemetry": {
-                      "lateral_accel_g": 0.12,
-                      "forward_ttc_seconds": 7.5,
-                      "grade_pitch_pct": -2.0,
-                      "aeb_triggered": False,
-                      "gear_reverse_active": False
-                  },
-                  "model_confidence": 0.48,
-                  "model_entropy": 0.82,
-                  "temporal_variance_5frame": 0.065,
-                  "cosine_distance_to_baseline": 0.45,
-                  "gps_coordinates": [-22.3190, 119.8260],
-                  "embedding_128d": [random.uniform(-0.1, 0.1) for _ in range(128)],
-                  "inside_campaign_geofence": False,
-                  "is_shift_anchor": False
-              })
-
-              # Event 3: Filter 3 Trigger - Novel road condition / spillage
-              events.append({
-                  "event_id": "EVT_F3_NOVEL_SPILLAGE_003",
-                  "timestamp_epoch": now - 180,
-                  "truck_id": "HT_408_400T",
-                  "can_telemetry": {
-                      "lateral_accel_g": 0.08,
-                      "forward_ttc_seconds": 9.0,
-                      "grade_pitch_pct": 0.5,
-                      "aeb_triggered": False,
-                      "gear_reverse_active": False
-                  },
-                  "model_confidence": 0.85,
-                  "model_entropy": 0.25,
-                  "temporal_variance_5frame": 0.01,
-                  "cosine_distance_to_baseline": 0.79, # tau > 0.72 trigger
-                  "gps_coordinates": [-22.3201, 119.8275],
-                  "embedding_128d": [0.5] * 128,
-                  "inside_campaign_geofence": False,
-                  "is_shift_anchor": False
-              })
-
-              # Event 4: Filter 6 Candidate A (First observation at intersection)
-              common_emb = [0.2] * 128
-              events.append({
-                  "event_id": "EVT_F6_INTERSECTION_REPEAT_004A",
-                  "timestamp_epoch": now - 120,
-                  "truck_id": "HT_410_400T",
-                  "can_telemetry": {
-                      "lateral_accel_g": 0.05,
-                      "forward_ttc_seconds": 12.0,
-                      "grade_pitch_pct": 0.0,
-                      "aeb_triggered": False,
-                      "gear_reverse_active": False
-                  },
-                  "model_confidence": 0.60, # F2 trigger candidate
-                  "model_entropy": 0.72,
-                  "temporal_variance_5frame": 0.042,
-                  "cosine_distance_to_baseline": 0.40,
-                  "gps_coordinates": [-22.3210, 119.8280],
-                  "embedding_128d": common_emb,
-                  "inside_campaign_geofence": False,
-                  "is_shift_anchor": False
-              })
-
-              # Event 5: Filter 6 Candidate B (Duplicate observation 3 minutes later, 20m away)
-              events.append({
-                  "event_id": "EVT_F6_INTERSECTION_REPEAT_004B",
-                  "timestamp_epoch": now - 60,
-                  "truck_id": "HT_412_400T",
-                  "can_telemetry": {
-                      "lateral_accel_g": 0.05,
-                      "forward_ttc_seconds": 11.5,
-                      "grade_pitch_pct": 0.0,
-                      "aeb_triggered": False,
-                      "gear_reverse_active": False
-                  },
-                  "model_confidence": 0.61, # F2 trigger candidate
-                  "model_entropy": 0.71,
-                  "temporal_variance_5frame": 0.041,
-                  "cosine_distance_to_baseline": 0.41,
-                  "gps_coordinates": [-22.3211, 119.8281], # ~15m away
-                  "embedding_128d": common_emb,            # identical feature embedding (cos sim = 1.0)
-                  "inside_campaign_geofence": False,
-                  "is_shift_anchor": False
-              })
-
-              # Event 6: Filter 5 Mandatory Shift Anchor
-              events.append({
-                  "event_id": "EVT_F5_SHIFT_ANCHOR_005",
-                  "timestamp_epoch": now - 30,
-                  "truck_id": "HT_401_400T",
-                  "can_telemetry": {
-                      "lateral_accel_g": 0.02,
-                      "forward_ttc_seconds": 20.0,
-                      "grade_pitch_pct": 1.0,
-                      "aeb_triggered": False,
-                      "gear_reverse_active": False
-                  },
-                  "model_confidence": 0.98,
-                  "model_entropy": 0.05,
-                  "temporal_variance_5frame": 0.002,
-                  "cosine_distance_to_baseline": 0.10,
-                  "gps_coordinates": [-22.3160, 119.8220],
-                  "embedding_128d": [random.uniform(-0.05, 0.05) for _ in range(128)],
-                  "inside_campaign_geofence": False,
-                  "is_shift_anchor": True
-              })
-
-              # Events 7 to 100: 94 nominal haul segments (discarded)
-              for i in range(7, 101):
-                  events.append({
-                      "event_id": f"EVT_NOMINAL_HAUL_{i:03d}",
-                      "timestamp_epoch": now - (100 - i) * 10,
-                      "truck_id": f"HT_{400 + (i % 15):03d}_400T",
-                      "can_telemetry": {
-                          "lateral_accel_g": random.uniform(0.01, 0.15),
-                          "forward_ttc_seconds": random.uniform(6.0, 25.0),
-                          "grade_pitch_pct": random.uniform(-4.0, 4.0),
-                          "aeb_triggered": False,
-                          "gear_reverse_active": False
-                      },
-                      "model_confidence": random.uniform(0.85, 0.99),
-                      "model_entropy": random.uniform(0.05, 0.40),
-                      "temporal_variance_5frame": random.uniform(0.001, 0.02),
-                      "cosine_distance_to_baseline": random.uniform(0.05, 0.50),
-                      "gps_coordinates": [-22.3150 + random.uniform(0, 0.01), 119.8210 + random.uniform(0, 0.01)],
-                      "embedding_128d": [random.uniform(-0.05, 0.05) for _ in range(128)],
-                      "inside_campaign_geofence": False,
-                      "is_shift_anchor": False
-                  })
-
-              for evt in events:
-                  file_path = target_dir / f"event_{evt['event_id']}.json"
-                  with open(file_path, "w") as f:
-                      json.dump(evt, f, indent=2)
-
-              print(f"[Simulator] Successfully generated {len(events)} telemetry payloads in {target_dir}.")
+            - -m
+            - simulator.generator
       volumes:
         - name: raw-ingest-volume
           persistentVolumeClaim:

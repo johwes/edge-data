@@ -234,51 +234,93 @@ If any filter flags a candidate snippet, it enters fleet deduplication:
 
 ## 6. OpenShift & NetApp Kubernetes Manifest Architecture
 
-The complete deployable Kubernetes manifests are located in [`demo/k8s/`](./k8s/):
+The complete deployable Kubernetes and OpenShift manifests are located in [`demo/k8s/`](./k8s/):
 
 ```
-demo/k8s/
-├── 00_namespace.yaml             # Namespace, ServiceAccount, non-root OpenShift SCC compliance
-├── 01_storage_classes.yaml       # NetApp ONTAP NAS (RWX) and SAN (RWO) Trident StorageClasses + SnapshotClass
-├── 02_persistent_volumes.yaml    # Raw Ingest (500 GiB demo-scale) and Curated GDS (100 GiB) PVCs
-├── 03_triage_configmap.yaml      # Triage quotas, thresholds, campaigns, and storage eviction policy
-├── 04_triage_deployment.yaml     # Containerized edge triage worker pod with inotify watcher & probes
-└── 05_simulator_job.yaml         # Synthetic fleet generator Job producing 100 test events
+demo/
+├── src/                          # Enterprise modular Python microservice source
+│   ├── Containerfile             # Hardened Red Hat UBI 9 image definition
+│   ├── requirements.txt          # mcap, usearch, pyyaml, pydantic, prometheus-client
+│   ├── triage_engine/            # Core triage engine package
+│   │   ├── config.py             # Pydantic schema validation & inotify policy reloader
+│   │   ├── metrics.py            # Prometheus metrics (bytes, counters, reduction ratio)
+│   │   ├── pipeline.py           # MCAP processor & USearch CPU SIMD vector index
+│   │   └── main.py               # Main service daemon & HTTP metrics server
+│   └── simulator/                # Benchmark fleet telemetry generator
+│       └── generator.py          # Emits genuine multi-channel MCAP containers
+│
+└── k8s/                          # OpenShift & NetApp manifests
+    ├── 00_namespace.yaml         # Namespace, ServiceAccount, non-root OpenShift SCC compliance
+    ├── 01_storage_classes.yaml   # NetApp ONTAP NAS (RWX) and SAN (RWO) Trident StorageClasses + SnapshotClass
+    ├── 02_persistent_volumes.yaml# Raw Ingest (500 GiB demo-scale) and Curated GDS (100 GiB) PVCs
+    ├── 03_triage_configmap.yaml  # Triage quotas, thresholds, campaigns, and storage eviction policy
+    ├── 04_triage_deployment.yaml # Containerized triage worker pod with probes & Prometheus port 8080
+    ├── 05_simulator_job.yaml     # Benchmark fleet generator Job producing 100 MCAP test packages
+    ├── 06_monitoring.yaml        # Service and OpenShift ServiceMonitor for Web Console dashboards
+    └── 07_buildconfig.yaml       # OpenShift ImageStream & BuildConfig for in-cluster builds
 ```
 
 ### 6.1 Storage Classes & NetApp Trident Integration (`01_storage_classes.yaml`)
-* **`netapp-ontap-nas`:** Configured with `nfs` protocol and `ReadWriteMany` (RWX) access mode, allowing the simulator job and triage worker to mount the volume concurrently.
-* **`netapp-ontap-san`:** Configured with `iscsi` protocol and `ReadWriteOnce` (RWO) for dedicated high-throughput raw buffers.
+* **`ontap-nas`:** Configured with `nfs` protocol (NFS v4.1, 1MB rsize/wsize) and `ReadWriteMany` (RWX) access mode, allowing the simulator job and triage worker to mount the volume concurrently.
+* **`ontap-san`:** Configured with `iscsi` protocol and `ReadWriteOnce` (RWO) for dedicated high-throughput raw buffers.
 * **`netapp-snapshot-class`:** `VolumeSnapshotClass` enabling zero-impact point-in-time snapshots for forensic audit retention.
 
-### 6.2 Hot-Reloading Configuration via RHACM & Offline Resiliency
-* **ConfigMap Hot-Reloading:** The triage worker does not use static environment variables or `subPath` mounts (which prevent live updates). Instead, `03_triage_configmap.yaml` is mounted as a full directory volume at `/etc/triage-config`. The Python worker utilizes an internal `inotify` file-watcher that detects modifications to `/etc/triage-config/triage_policy.yaml` and hot-reloads detection thresholds and campaigns within 5 seconds without container restarts.
+### 6.2 In-Cluster Image Build (`07_buildconfig.yaml`)
+On OpenShift, developers do not need an external Docker Hub or Quay.io registry account. The provided `BuildConfig` builds the container directly inside the 3-node cluster:
+```bash
+oc start-build edge-triage-builder --from-dir=demo/src --follow -n edge-triage
+```
+This pushes `edge-triage-engine:latest` into the cluster's internal registry (`image-registry.openshift-image-registry.svc:5000/edge-triage/edge-triage-engine:latest`), which the Deployment and Simulator Job consume immediately.
+
+### 6.3 OpenShift Monitoring & Telemetry Dashboard (`06_monitoring.yaml`)
+The triage worker exports real-time metrics on port 8080 (`/metrics`), scraped automatically by OpenShift's cluster monitoring stack:
+* `edge_triage_bytes_ingested_total` vs `edge_triage_bytes_curated_total`
+* `edge_triage_reduction_percentage` (exposes live 99%+ volume reduction)
+* `edge_triage_events_curated_total` (labeled by `tier`)
+* `edge_triage_dedup_suppressions_total` (counts Filter 6 duplicates suppressed)
+
+### 6.4 Hot-Reloading Configuration via RHACM & Offline Resiliency
+* **ConfigMap Hot-Reloading:** The triage worker does not use static environment variables or `subPath` mounts. Instead, `03_triage_configmap.yaml` is mounted as a full directory volume at `/etc/triage-config`. The Python worker monitors file modification timestamps and hot-reloads detection thresholds, campaigns, and quotas within seconds without container restarts.
 * **Satellite WAN Blackout Behavior:** If remote satellite WAN drops out, RHACM cannot reach the edge pod. The edge pod continues running deterministically using the locally cached ConfigMap and NetApp persistent storage, buffering curated GDS events locally on the 100 GiB PVC until satellite connectivity resumes.
 
 ---
 
-## 7. Developer Implementation Roadmap
+## 7. Execution Guide: Running the Demo on a 3-Node OpenShift Cluster
 
-Development is organized across four clear milestones:
+Follow these steps to run the complete demonstration:
 
-### Milestone 1: Local Python Prototype (Standalone)
-* **Deliverables:**
-  * `fleet_telemetry_simulator.py`: Generates 100 mock truck events (80 nominal, 10 kinematic/E-stops, 4 perception uncertainty, 5 duplicate obstacle encounters, and 1 uniform nominal anchor for Filter 5).
-  * `edge_triage_engine.py`: Implements Filters 1, 2, 3, 5, and 6, executes channel pruning (preserving reverse channels), and produces complete `gds_metadata_v2.json` catalogs.
-* **Success Metric:** Ingests 100 mock events (~200 GB), discards 95 nominal events, deduplicates cross-truck encounters, and outputs ~4 curated snippets (~1.5–2.0 GB) with 100% schema validation.
+### Step 1: Create Namespace and Storage
+```bash
+kubectl apply -f demo/k8s/00_namespace.yaml
+kubectl apply -f demo/k8s/01_storage_classes.yaml
+kubectl apply -f demo/k8s/02_persistent_volumes.yaml
+kubectl apply -f demo/k8s/03_triage_configmap.yaml
+```
 
-### Milestone 2: Containerization & Local Testing
-* **Deliverables:**
-  * `Containerfile`: Builds a hardened, multi-stage Red Hat UBI 9 container running the triage service.
-  * `podman-compose.yaml`: Runs the simulator and triage engine against local volume mounts simulating NetApp PVCs.
+### Step 2: Build the Container Image in OpenShift
+```bash
+oc apply -f demo/k8s/07_buildconfig.yaml
+oc start-build edge-triage-builder --from-dir=demo/src --follow -n edge-triage
+```
 
-### Milestone 3: OpenShift & NetApp Trident Deployment
-* **Deliverables:**
-  * Apply `demo/k8s/` manifests to an OpenShift / MicroShift cluster with NetApp Astra Trident installed.
-  * Verify that the worker successfully reads from `raw-ingest-pvc` and writes to `gds-curated-pvc`.
-  * Validate NetApp Snapshot creation for forensic audit trails.
+### Step 3: Deploy the Triage Worker and Prometheus Monitoring
+```bash
+oc apply -f demo/k8s/04_triage_deployment.yaml
+oc apply -f demo/k8s/06_monitoring.yaml
+```
 
-### Milestone 4: Central Multi-Cluster Orchestration via RHACM
-* **Deliverables:**
-  * RHACM `Application` and modern `Placement` API deploying the triage engine across Crusher Pod and Fuel Bay edge clusters.
-  * GitOps demonstration: Committing a dynamic Filter 4 harvesting campaign rule in Git and observing RHACM propagate the rule to edge nodes in real time.
+### Step 4: Run the 100-Event Fleet Simulator
+```bash
+oc apply -f demo/k8s/05_simulator_job.yaml
+```
+
+### Step 5: Observe Live Reduction in Logs and OpenShift Web Console
+```bash
+# Follow the live triage engine logs
+oc logs -n edge-triage -l app.kubernetes.io/component=triage-worker -f
+
+# Verify curated packages on the NetApp Curated Volume
+oc exec -n edge-triage deploy/edge-triage-worker -- ls -lh /mnt/gds_curated
+```
+In the OpenShift Web Console under **Observe -> Metrics**, query `edge_triage_reduction_percentage` to observe the live 99% data volume reduction graph.
+

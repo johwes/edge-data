@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: edge-triage-metrics
+  namespace: edge-triage
+  labels:
+    app.kubernetes.io/name: edge-data-triage
+    app.kubernetes.io/component: triage-worker
+spec:
+  type: ClusterIP
+  ports:
+    - name: metrics
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: edge-data-triage
+    app.kubernetes.io/component: triage-worker
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: edge-triage-monitor
+  namespace: edge-triage
+  labels:
+    app.kubernetes.io/name: edge-data-triage
+    app.kubernetes.io/component: triage-worker
+spec:
+  endpoints:
+    - port: metrics
+      interval: 10s
+      path: /metrics
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: edge-data-triage
+      app.kubernetes.io/component: triage-worker

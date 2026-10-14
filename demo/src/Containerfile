@@ -1,0 +1,29 @@
+FROM registry.access.redhat.com/ubi9/python-311:latest
+
+USER root
+WORKDIR /app
+
+# Install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copy application source
+COPY triage_engine/ ./triage_engine/
+COPY simulator/ ./simulator/
+
+# Set up unprivileged user compliance (OpenShift restricted SCC)
+RUN chown -R 1001:0 /app && \
+    chmod -R g+rwX /app
+
+USER 1001
+
+EXPOSE 8080
+
+ENV PYTHONUNBUFFERED=1 \
+    CONFIG_PATH=/etc/triage-config/triage_policy.yaml \
+    RAW_INGEST_PATH=/mnt/raw_ingest \
+    GDS_CURATED_PATH=/mnt/gds_curated \
+    METRICS_PORT=8080
+
+CMD ["python3", "-m", "triage_engine.main"]
