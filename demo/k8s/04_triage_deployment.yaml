@@ -1,0 +1,253 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: edge-triage-worker
+  namespace: edge-triage
+  labels:
+    app.kubernetes.io/name: edge-data-triage
+    app.kubernetes.io/component: triage-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: edge-data-triage
+      app.kubernetes.io/component: triage-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: edge-data-triage
+        app.kubernetes.io/component: triage-worker
+    spec:
+      serviceAccountName: edge-triage-sa
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: triage-worker
+          image: registry.access.redhat.com/ubi9/python-311:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          volumeMounts:
+            - name: raw-ingest-volume
+              mountPath: /mnt/raw_ingest
+            - name: gds-curated-volume
+              mountPath: /mnt/gds_curated
+            - name: triage-config-volume
+              mountPath: /etc/triage-config
+              readOnly: true
+            - name: cache-volume
+              mountPath: /var/cache/usearch
+            - name: tmp-volume
+              mountPath: /tmp
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CONFIG_PATH
+              value: "/etc/triage-config/triage_policy.yaml"
+            - name: RAW_INGEST_PATH
+              value: "/mnt/raw_ingest"
+            - name: GDS_CURATED_PATH
+              value: "/mnt/gds_curated"
+          command:
+            - python3
+            - -c
+            - |
+              import os, sys, time, json, math, shutil, glob
+              from pathlib import Path
+              try:
+                  import yaml
+              except ImportError:
+                  os.system("pip install --no-cache-dir pyyaml")
+                  import yaml
+
+              print("[TriageWorker] Initializing Edge Triage Service v2.0...")
+              cfg_path = os.getenv("CONFIG_PATH", "/etc/triage-config/triage_policy.yaml")
+              raw_dir = Path(os.getenv("RAW_INGEST_PATH", "/mnt/raw_ingest"))
+              out_dir = Path(os.getenv("GDS_CURATED_PATH", "/mnt/gds_curated"))
+              out_dir.mkdir(parents=True, exist_ok=True)
+              
+              last_mtime = 0
+              policy = {}
+              dedup_coreset = [] # in-memory (timestamp, lat, lon, embedding)
+
+              def load_policy():
+                  global policy, last_mtime
+                  if not os.path.exists(cfg_path):
+                      return
+                  mtime = os.path.getmtime(cfg_path)
+                  if mtime != last_mtime:
+                      with open(cfg_path, 'r') as f:
+                          policy = yaml.safe_load(f)
+                      last_mtime = mtime
+                      print(f"[PolicyWatcher] Hot-reloaded triage policy v{policy.get('version')} (Cell: {policy.get('cell_id')})")
+
+              load_policy()
+              health_file = Path("/tmp/healthy")
+              health_file.touch()
+
+              print(f"[TriageWorker] Monitoring {raw_dir} for ingested vehicle payloads...")
+              while True:
+                  load_policy()
+                  health_file.touch()
+                  
+                  # Look for incoming event metadata JSON files
+                  meta_files = list(raw_dir.glob("**/event_*.json"))
+                  for meta_file in meta_files:
+                      try:
+                          with open(meta_file, 'r') as f:
+                              event = json.load(f)
+                          event_id = event.get("event_id", meta_file.stem)
+                          print(f"\n[Processing] Evaluating event {event_id}...")
+                          
+                          # Extract CAN & perception signals
+                          can = event.get("can_telemetry", {})
+                          lat_g = abs(can.get("lateral_accel_g", 0.0))
+                          ttc = can.get("forward_ttc_seconds", 99.0)
+                          grade = can.get("grade_pitch_pct", 0.0)
+                          aeb = can.get("aeb_triggered", False)
+                          
+                          # Filter 1: Safety & CAN Dynamics
+                          f1_cfg = policy.get("filter_1_deterministic", {})
+                          f1_base = f1_cfg.get("baseline", {"lateral_accel_g": 0.30, "ttc_seconds": 3.0})
+                          f1_down = f1_cfg.get("downhill_grade_adjustment", {"grade_threshold_pct": 8.0, "lateral_accel_g": 0.20, "ttc_seconds": 4.5})
+                          
+                          is_downhill = grade < -abs(f1_down.get("grade_threshold_pct", 8.0))
+                          thresh_g = f1_down.get("lateral_accel_g") if is_downhill else f1_base.get("lateral_accel_g")
+                          thresh_ttc = f1_down.get("ttc_seconds") if is_downhill else f1_base.get("ttc_seconds")
+                          
+                          f1_pass = aeb or (lat_g >= thresh_g) or (ttc <= thresh_ttc)
+                          
+                          # Filter 2: Perception Uncertainty
+                          f2_cfg = policy.get("filter_2_uncertainty", {})
+                          entropy = event.get("model_entropy", 0.0)
+                          conf = event.get("model_confidence", 1.0)
+                          var_5f = event.get("temporal_variance_5frame", 0.0)
+                          f2_pass = (conf < f2_cfg.get("detection_confidence_threshold", 0.65)) or \
+                                    (entropy > f2_cfg.get("shannon_entropy_threshold", 0.70)) or \
+                                    (var_5f > f2_cfg.get("temporal_variance_5frame_threshold", 0.04))
+                                    
+                          # Filter 3: Unsupervised Novelty
+                          f3_cfg = policy.get("filter_3_novelty", {})
+                          novelty_dist = event.get("cosine_distance_to_baseline", 0.0)
+                          f3_pass = novelty_dist > f3_cfg.get("distance_threshold_tau", 0.72)
+                          
+                          # Filter 4: Campaign Geofence
+                          f4_pass = event.get("inside_campaign_geofence", False)
+                          
+                          # Filter 5: Statistical Anchor
+                          f5_pass = event.get("is_shift_anchor", False)
+                          
+                          candidate_fired = f1_pass or f2_pass or f3_pass or f4_pass or f5_pass
+                          
+                          if not candidate_fired:
+                              print(f"[-] Event {event_id}: Discarded by filters 1-5 (Nominal haul segment).")
+                              meta_file.unlink(missing_ok=True)
+                              continue
+                              
+                          tier = "TIER_1_FORENSIC" if f1_pass else \
+                                 "TIER_2_MODEL_UNCERTAINTY" if f2_pass else \
+                                 "TIER_3_FEATURE_NOVELTY" if f3_pass else \
+                                 "TIER_4_CAMPAIGN" if f4_pass else "TIER_5_ANCHOR"
+                          
+                          # Filter 6: Spatiotemporal Coreset Deduplication
+                          f6_suppressed = False
+                          if tier in ["TIER_2_MODEL_UNCERTAINTY", "TIER_3_FEATURE_NOVELTY"]:
+                              ts = event.get("timestamp_epoch", time.time())
+                              coords = event.get("gps_coordinates", [0.0, 0.0])
+                              emb = event.get("embedding_128d", [])
+                              
+                              # Check against recent coreset items within 2 hours & 100 meters
+                              for c_ts, c_coords, c_emb in dedup_coreset[-50:]:
+                                  if abs(ts - c_ts) < 7200:
+                                      dist_m = math.sqrt((coords[0]-c_coords[0])**2 + (coords[1]-c_coords[1])**2) * 111000
+                                      if dist_m < 100.0:
+                                          # cosine similarity check
+                                          if emb and c_emb and len(emb) == len(c_emb):
+                                              dot = sum(a*b for a, b in zip(emb, c_emb))
+                                              norm_a = math.sqrt(sum(a*a for a in emb))
+                                              norm_b = math.sqrt(sum(b*b for b in c_emb))
+                                              sim = dot / (norm_a * norm_b + 1e-9)
+                                              if sim >= 0.90:
+                                                  f6_suppressed = True
+                                                  print(f"[-] Event {event_id}: Suppressed by Filter 6 (Duplicate haul @ {dist_m:.1f}m, sim: {sim:.3f}).")
+                                                  break
+                              if not f6_suppressed:
+                                  dedup_coreset.append((ts, coords, emb))
+                                  
+                          if f6_suppressed:
+                              meta_file.unlink(missing_ok=True)
+                              continue
+                              
+                          print(f"[+] Event {event_id}: ACCEPTED under {tier}! Decimating channels to GDS format...")
+                          
+                          # Write GDS curated output
+                          curated_record = {
+                              "event_id": event_id,
+                              "schema_version": "2.0.0",
+                              "assigned_tier": tier,
+                              "triage_metadata": {
+                                  "f1_safety": f1_pass,
+                                  "f2_uncertainty": f2_pass,
+                                  "f3_novelty": f3_pass,
+                                  "f4_geofence": f4_pass,
+                                  "f5_anchor": f5_pass,
+                                  "f6_dedup_passed": True
+                              },
+                              "channels_curated": [
+                                  "cam_front_center_8mp",
+                                  "lidar_128_beam_main",
+                                  "radar_front_long_range"
+                              ],
+                              "estimated_payload_mb": 350.0
+                          }
+                          
+                          out_file = out_dir / f"gds_curated_{event_id}.json"
+                          with open(out_file, 'w') as out_f:
+                              json.dump(curated_record, out_f, indent=2)
+                          
+                          print(f"[Done] Curated event saved to {out_file}.")
+                          meta_file.unlink(missing_ok=True)
+                          
+                      except Exception as err:
+                          print(f"[Error] Failed processing {meta_file}: {err}")
+                  
+                  time.sleep(2)
+          livenessProbe:
+            exec:
+              command:
+                - cat
+                - /tmp/healthy
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            exec:
+              command:
+                - cat
+                - /tmp/healthy
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: raw-ingest-volume
+          persistentVolumeClaim:
+            claimName: raw-ingest-pvc
+        - name: gds-curated-volume
+          persistentVolumeClaim:
+            claimName: gds-curated-pvc
+        - name: triage-config-volume
+          configMap:
+            name: triage-policy
+        - name: cache-volume
+          emptyDir: {}
+        - name: tmp-volume
+          emptyDir: {}

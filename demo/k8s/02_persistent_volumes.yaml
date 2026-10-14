@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: raw-ingest-pvc
+  namespace: edge-triage
+  labels:
+    app.kubernetes.io/name: edge-data-triage
+    storage.netapp.io/tier: raw-ingest
+    scale: demo-scale-ring
+  annotations:
+    demo.architecture/sizing-note: "Demo allocation sized at 500Gi. Production haul cells deploy 30-50 TB/day rolling NVMe/SSD NFS ring on NetApp AFF/FAS."
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ontap-nas
+  resources:
+    requests:
+      storage: 500Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gds-curated-pvc
+  namespace: edge-triage
+  labels:
+    app.kubernetes.io/name: edge-data-triage
+    storage.netapp.io/tier: gds-curated
+    scale: demo-curated-pool
+  annotations:
+    demo.architecture/sizing-note: "Curated GDS output pool sized at 100Gi (~285 events @ 350MB average, providing 14-28 days edge retention prior to cloud upload)."
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ontap-nas
+  resources:
+    requests:
+      storage: 100Gi

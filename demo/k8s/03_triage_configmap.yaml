@@ -1,0 +1,124 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: triage-policy
+  namespace: edge-triage
+  labels:
+    app.kubernetes.io/name: edge-data-triage
+    app.kubernetes.io/managed-by: rhacm
+data:
+  triage_policy.yaml: |
+    # Edge Data Triage Runtime Policy
+    version: "2.0"
+    cell_id: "pilbara-cell-04"
+    
+    # Daily Uplink Quotas (GB per 10-truck cell per day)
+    quotas:
+      daily_ceiling_gb: 20.0
+      nominal_target_gb: 7.0
+      preemption_order:
+        - tier_5_statistical_anchor  # Evicted first if quota breached
+        - tier_4_campaign_targeted
+        - tier_3_novelty
+        - tier_2_uncertainty
+        - tier_1_forensic_safety     # Protected; never evicted (spills to sneakernet)
+      tier_limits_gb:
+        tier_1: 5.0
+        tier_2: 7.0
+        tier_3: 5.0
+        tier_4: 2.0
+        tier_5: 1.0
+
+    # Filter 1: Deterministic Safety & CAN Dynamics
+    filter_1_deterministic:
+      enabled: true
+      baseline:
+        lateral_accel_g: 0.30
+        ttc_seconds: 3.0
+      downhill_grade_adjustment:
+        grade_threshold_pct: 8.0
+        lateral_accel_g: 0.20
+        ttc_seconds: 4.5
+      trigger_signals:
+        - aeb_active
+        - abs_traction_event
+        - operator_takeover
+        - rollover_warning
+
+    # Filter 2: Perception Model Uncertainty
+    filter_2_uncertainty:
+      enabled: true
+      detection_confidence_threshold: 0.65
+      shannon_entropy_threshold: 0.70
+      temporal_variance_5frame_threshold: 0.04
+      # Note: Temporal variance MUST be calculated on raw 30 FPS stream prior to 10 FPS decimation
+
+    # Filter 3: Unsupervised Feature Novelty (Edge Vector Search)
+    filter_3_novelty:
+      enabled: true
+      vector_dim: 128
+      similarity_metric: "cosine"
+      distance_threshold_tau: 0.72
+      local_index_path: "/var/cache/usearch/baseline_128d.usearch"
+      daily_vector_sync_mb: 50.0
+
+    # Filter 4: Campaign Geofencing
+    filter_4_geofence:
+      enabled: true
+      active_campaign_id: "blast_zone_regrade_2026_q4"
+      polygon_coordinates:
+        - [-22.3150, 119.8210]
+        - [-22.3150, 119.8290]
+        - [-22.3220, 119.8290]
+        - [-22.3220, 119.8210]
+
+    # Filter 5: Statistical & Anchor Uniform Sampling
+    filter_5_sampling:
+      enabled: true
+      uniform_sampling_rate: 0.001  # 0.1% baseline sampling
+      mandatory_shift_anchor: true  # 1 nominal sequence preserved per shift
+
+    # Filter 6: Spatiotemporal Coreset Deduplication
+    filter_6_dedup:
+      enabled: true
+      time_window_seconds: 7200     # 2 hours
+      spatial_radius_meters: 100.0  # H3 resolution 9 (~100m)
+      cosine_similarity_min: 0.90   # Cosine distance < 0.10
+      target_suppression_rate: 0.70 # 60-80% suppression of redundant candidate events
+
+    # Sensor Decimation Rules (Specification 02)
+    decimation:
+      nominal:
+        video_fps: 10               # Decimated from 30 FPS
+        lidar_crop_range_meters: 100.0
+        radar_range_meters: 150.0
+      reversing_exception:
+        trigger: "gear_reverse_active"
+        promoted_channels:
+          - cam_rear_center_8mp
+          - cam_rear_left_surround_2mp
+          - cam_rear_right_surround_2mp
+          - lidar_perimeter_rear_left
+          - lidar_perimeter_rear_right
+        decimated_forward_channels:
+          - cam_front_telephoto_8mp
+          - cam_front_left_surround_2mp
+          - cam_front_right_surround_2mp
+
+  storage_eviction_policy.yaml: |
+    # Storage Capacity & Retention Eviction Policy
+    storage_pool: "raw-ingest-pvc"
+    high_watermark_pct: 90
+    low_watermark_pct: 75
+    check_interval_seconds: 30
+    eviction_priority:
+      1: "tier_5_nominal"
+      2: "tier_4_campaign"
+      3: "tier_3_novelty"
+      4: "tier_2_uncertainty"
+      5: "tier_1_forensic" # Immutable for 14 days unless cloud synced
+    wan_outage_behavior:
+      mode: "local_cache"
+      pause_cloud_sync: true
+      freeze_forensic_eviction: true
+      spillover_notification: "alert_sneakernet_ssd_required"

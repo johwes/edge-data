@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: edge-triage
+  labels:
+    app.kubernetes.io/name: edge-data-triage
+    app.kubernetes.io/part-of: edge-data-triage
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: edge-triage-sa
+  namespace: edge-triage
+  labels:
+    app.kubernetes.io/name: edge-data-triage
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: edge-triage-reader
+  namespace: edge-triage
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: edge-triage-reader-binding
+  namespace: edge-triage
+subjects:
+  - kind: ServiceAccount
+    name: edge-triage-sa
+    namespace: edge-triage
+roleRef:
+  kind: Role
+  name: edge-triage-reader
+  apiGroup: rbac.authorization.k8s.io
