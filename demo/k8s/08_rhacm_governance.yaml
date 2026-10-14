@@ -59,11 +59,11 @@ spec:
                       daily_ceiling_gb: 20.0
                       nominal_target_gb: 7.0
                       preemption_order:
-                        - tier_5_statistical_anchor
-                        - tier_4_campaign_targeted
+                        - tier_5_anchor
+                        - tier_4_campaign
                         - tier_3_novelty
                         - tier_2_uncertainty
-                        - tier_1_forensic_safety
+                        - tier_1_forensic
 ---
 apiVersion: policy.open-cluster-management.io/v1
 kind: PlacementBinding
