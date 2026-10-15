@@ -43,25 +43,36 @@ A practical, enterprise-grade demonstration of **Autonomous Fleet Data Triage an
 
 ## Quick-Start Deployment Guide
 
-### Step 1: Create Namespace and Storage Resources
+### Step 1: Select or Create Project Namespace and Storage Resources
 
-Apply the namespace, RBAC, Astra Trident storage classes, and NetApp persistent volume claims:
+First, establish your OpenShift project context:
 
 ```bash
-# 1. Create edge-triage namespace and service account
-oc apply -f demo/k8s/00_namespace.yaml
+# Option A: If using an existing pre-assigned project (e.g. cloud / shared clusters):
+oc project rhn-sa-jwesterl-dev   # Replace with your assigned project name
+oc apply -f demo/k8s/00_rbac.yaml
 
-# 2. Configure StorageClass (NetApp ONTAP / Astra Trident ONLY)
+# Option B: If you have cluster-admin rights and want a fresh dedicated namespace:
+oc apply -f demo/k8s/00_namespace.yaml
+oc project edge-triage
+oc apply -f demo/k8s/00_rbac.yaml
+```
+
+Next, apply storage configuration and runtime policy within your active project:
+
+```bash
+# 1. Configure StorageClass (NetApp ONTAP / Astra Trident ONLY)
 # SKIP THIS STEP if deploying on public cloud (AWS ROSA, Azure ARO, GCP OCP).
 # Only apply this if your cluster has the NetApp Astra Trident CSI Operator installed:
 # oc apply -f demo/k8s/01_storage_classes.yaml
 
-# 3. Create Persistent Volume Claims
-# By default, storageClassName is omitted so it binds automatically to your cluster's default StorageClass.
+# 2. Create Persistent Volume Claims
+# By default, storageClassName is omitted so it binds automatically to your cluster's default RWX StorageClass.
 # Sized at a lean 10Gi (raw) and 5Gi (curated) to eliminate cloud provisioning fees.
+# (Or uncomment 'efs-sc' / 'azurefile-csi' / 'standard-rwx' in 02_persistent_volumes.yaml).
 oc apply -f demo/k8s/02_persistent_volumes.yaml
 
-# 4. Deploy the runtime triage policy ConfigMap
+# 3. Deploy the runtime triage policy ConfigMap
 oc apply -f demo/k8s/03_triage_configmap.yaml
 ```
 
@@ -72,7 +83,7 @@ oc apply -f demo/k8s/03_triage_configmap.yaml
 
 Verify storage bindings:
 ```bash
-oc get pvc -n edge-triage
+oc get pvc
 ```
 *Expected status: Both `raw-ingest-pvc` and `gds-curated-pvc` should report `Bound`.*
 
@@ -87,9 +98,9 @@ You do not need external Docker Hub or Quay.io credentials. OpenShift builds the
 oc apply -f demo/k8s/07_buildconfig.yaml
 
 # 2. Trigger the in-cluster build from local source
-oc start-build edge-triage-builder --from-dir=demo/src --follow -n edge-triage
+oc start-build edge-triage-builder --from-dir=demo/src --follow
 ```
-*OpenShift will compile the UBI 9 image, install `mcap` and `usearch`, and tag `edge-triage-engine:latest` into the cluster's internal registry.*
+*OpenShift will compile the UBI 9 image, install `mcap` and `usearch`, and tag `edge-triage-engine:latest` into the cluster's internal registry with local ImageStream lookup enabled.*
 
 ---
 
@@ -105,7 +116,7 @@ oc apply -f demo/k8s/06_monitoring.yaml
 
 Verify the triage worker is running:
 ```bash
-oc get pods -n edge-triage -l app.kubernetes.io/component=triage-worker
+oc get pods -l app.kubernetes.io/component=triage-worker
 ```
 *Expected status: `1/1 Running`.*
 
@@ -121,7 +132,7 @@ oc apply -f demo/k8s/05_simulator_job.yaml
 
 Watch the simulator generate packages:
 ```bash
-oc logs -n edge-triage -l app.kubernetes.io/component=simulator -f
+oc logs -l app.kubernetes.io/component=simulator -f
 ```
 
 ---
@@ -131,7 +142,7 @@ oc logs -n edge-triage -l app.kubernetes.io/component=simulator -f
 #### 1. Live Pod Logs
 Watch the triage engine make filtering, deduplication, and decimation decisions in real time:
 ```bash
-oc logs -n edge-triage -l app.kubernetes.io/component=triage-worker -f
+oc logs -l app.kubernetes.io/component=triage-worker -f
 ```
 
 **Key Log Events to Highlight in Demos:**
@@ -148,7 +159,7 @@ oc logs -n edge-triage -l app.kubernetes.io/component=triage-worker -f
 #### 2. OpenShift Web Console Metrics Dashboard
 Navigate to **Observe $\rightarrow$ Metrics** in the OpenShift Web Console and query:
 
-* `edge_triage_reduction_percentage` $\rightarrow$ Shows live **~98.6%** data reduction.
+* `edge_triage_reduction_percentage` $\rightarrow$ Shows live **~84% - 98%** data reduction.
 * `edge_triage_bytes_ingested_total` vs `edge_triage_bytes_curated_total` $\rightarrow$ Compares raw ingested bytes against curated output bytes.
 * `edge_triage_events_curated_total` $\rightarrow$ Breaks down curated events by tier (`tier="TIER_1_FORENSIC"`, etc.).
 * `edge_triage_dedup_suppressions_total` $\rightarrow$ Counts redundant events eliminated by Filter 6.
@@ -156,7 +167,7 @@ Navigate to **Observe $\rightarrow$ Metrics** in the OpenShift Web Console and q
 #### 3. Inspect Curated Persistent Storage
 Verify that curated Golden Data Set packages and incident video clips exist on the storage volume:
 ```bash
-oc exec -n edge-triage deploy/edge-triage-worker -- ls -lh /mnt/gds_curated
+oc exec deploy/edge-triage-worker -- ls -lh /mnt/gds_curated
 ```
 
 #### 4. Playback Extracted Incident Video Clips (FFmpeg In-Container Extraction)
@@ -169,10 +180,10 @@ When safety-critical events fire (e.g. `EVT_F1_AEB_DOWNHILL_001` or `EVT_REVERSI
 Fetch and play the extracted incident video clip on your local machine:
 ```bash
 # Get the triage worker pod name
-WORKER_POD=$(oc get pods -n edge-triage -l app.kubernetes.io/component=triage-worker -o jsonpath='{.items[0].metadata.name}')
+WORKER_POD=$(oc get pods -l app.kubernetes.io/component=triage-worker -o jsonpath='{.items[0].metadata.name}')
 
 # Copy the extracted 10s clip from the container volume to your workstation
-oc cp -n edge-triage ${WORKER_POD}:/mnt/gds_curated/gds_curated_EVT_F1_AEB_DOWNHILL_001_clip_10s_10fps.mp4 ./aeb_incident_10fps.mp4
+oc cp ${WORKER_POD}:/mnt/gds_curated/gds_curated_EVT_F1_AEB_DOWNHILL_001_clip_10s_10fps.mp4 ./aeb_incident_10fps.mp4
 
 # Play immediately in VLC, mpv, or open directly in Chrome/Safari/Firefox
 vlc ./aeb_incident_10fps.mp4
@@ -186,7 +197,7 @@ Without restarting the pod, change a threshold in `triage_policy.yaml`:
 
 ```bash
 # Edit the ConfigMap live
-oc edit configmap triage-policy -n edge-triage
+oc edit configmap triage-policy
 # E.g., change distance_threshold_tau from 0.72 to 0.90
 ```
 
@@ -215,18 +226,19 @@ To reset the demonstration:
 
 ```bash
 # Delete the simulator job
-oc delete job fleet-telemetry-simulator -n edge-triage
+oc delete job fleet-telemetry-simulator --ignore-not-found
 
 # Clean the curated and raw storage directories
-oc exec -n edge-triage deploy/edge-triage-worker -- rm -rf /mnt/raw_ingest/* /mnt/gds_curated/*
+oc exec deploy/edge-triage-worker -- rm -rf /mnt/raw_ingest/* /mnt/gds_curated/*
 
 # Complete stack teardown
-oc delete -f demo/k8s/05_simulator_job.yaml
+oc delete -f demo/k8s/05_simulator_job.yaml --ignore-not-found
 oc delete -f demo/k8s/04_triage_deployment.yaml
 oc delete -f demo/k8s/06_monitoring.yaml
 oc delete -f demo/k8s/07_buildconfig.yaml
 oc delete -f demo/k8s/03_triage_configmap.yaml
 oc delete -f demo/k8s/02_persistent_volumes.yaml
-oc delete -f demo/k8s/01_storage_classes.yaml
-oc delete -f demo/k8s/00_namespace.yaml
+oc delete -f demo/k8s/00_rbac.yaml
+# (Optional if you created a dedicated namespace):
+# oc delete -f demo/k8s/00_namespace.yaml
 ```

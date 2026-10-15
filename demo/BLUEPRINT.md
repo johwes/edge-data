@@ -295,11 +295,11 @@ demo/
 * **`TridentBackendConfig` & Secret:** Includes the declarative CRD and Secret template for connecting Astra Trident to the ONTAP SVM, management LIF, and data LIF so PVCs provision immediately without remaining in `Pending`.
 
 ### 6.2 In-Cluster Image Build (`07_buildconfig.yaml`)
-On OpenShift, developers do not need an external Docker Hub or Quay.io registry account. The provided `BuildConfig` builds the container directly inside the 3-node cluster:
+On OpenShift, developers do not need an external Docker Hub or Quay.io registry account. The provided `BuildConfig` builds the container directly inside the cluster:
 ```bash
-oc start-build edge-triage-builder --from-dir=demo/src --follow -n edge-triage
+oc start-build edge-triage-builder --from-dir=demo/src --follow
 ```
-This pushes `edge-triage-engine:latest` into the cluster's internal registry (`image-registry.openshift-image-registry.svc:5000/edge-triage/edge-triage-engine:latest`), which the Deployment and Simulator Job consume immediately with `imagePullPolicy: Always` and an `ImageChange` trigger.
+This pushes `edge-triage-engine:latest` into the cluster's internal registry, which the Deployment and Simulator Job consume immediately via OpenShift's native `ImageStream` local lookup (`lookupPolicy.local: true`).
 
 ### 6.3 OpenShift Monitoring & Telemetry Dashboard (`06_monitoring.yaml`)
 The triage worker exports real-time metrics on port 8080 (`/metrics`), scraped automatically by OpenShift's cluster monitoring stack:
