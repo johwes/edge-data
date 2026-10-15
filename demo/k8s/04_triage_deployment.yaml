@@ -68,6 +68,8 @@ spec:
               value: "/mnt/gds_curated"
             - name: METRICS_PORT
               value: "8080"
+            - name: VIDEO_STREAM_COPY
+              value: "false"  # Set to "true" for zero-CPU stream-copy (-c copy) on keyframe boundaries
           command:
             - python3
             - -m

@@ -170,7 +170,7 @@ If any filter flags a candidate snippet, it enters fleet deduplication:
 ### 3.5 Ingestion Handshake & Offload Atomicity (NFS / Trident)
 Multi-gigabyte vehicle recordings landing across 10G optical wireless berths or NFS mounts require strict atomic handshakes to prevent reading partial or in-flight writes:
 * **Temporary Suffix Masking:** Upstream offload agents (rsync, Zenoh, MinIO) write to `.mcap.tmp` or `.mcap.part` before atomically renaming to `.mcap`.
-* **Discrete Completion Sidecars:** The worker recognizes `.ready` or `.complete` sidecar files (`<event_id>.mcap.ready`), guaranteeing offload finalization.
+* **Discrete Completion Sidecars:** The worker recognizes `.ready` or `.complete` sidecar files (`<event_id>.mcap.ready` / `<event_id>.mcap.complete` or `<event_id>.ready` / `<event_id>.complete`), guaranteeing offload finalization before ingestion begins. Sidecars are cleanly purged upon curation or discard.
 * **Mtime Settle-Time Buffer:** In environments without sidecars, the worker enforces a minimum settle time ($\ge 2.0\text{s}$ unmodified) before claiming an `.mcap` file.
 * **Non-Destructive In-Flight Protection:** If an MCAP parser encounters incomplete chunk headers on a file modified within the last 5.0 seconds, it defers processing without deleting (`unlink`), ensuring active transfers are never corrupted.
 

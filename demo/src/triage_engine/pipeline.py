@@ -261,12 +261,21 @@ class TriagePipeline:
         self.coreset_buffer: List[Tuple[float, Tuple[float, float], List[float]]] = []
 
     def update_policy(self, new_policy: TriagePolicy):
+        old_path = self.local_index_path
         self.policy = new_policy
         self.cell_id = new_policy.cell_id
-        self.local_index_path = Path(new_policy.filter_3_novelty.local_index_path)
+        new_path = Path(new_policy.filter_3_novelty.local_index_path)
+        if new_path != old_path:
+            self.local_index_path = new_path
+            if USEARCH_AVAILABLE and self.usearch_index is not None and new_path.exists() and new_path.stat().st_size > 0:
+                try:
+                    self.usearch_index.load(str(new_path))
+                    logger.info(f"Reloaded USearch index from updated policy path: {new_path}")
+                except Exception as err:
+                    logger.warning(f"Failed to reload USearch index from {new_path}: {err}")
 
     def process_mcap_file(self, mcap_path: Path, output_dir: Path) -> Optional[Path]:
-        if mcap_path.name.endswith(".tmp") or not mcap_path.name.endswith(".mcap"):
+        if mcap_path.name.endswith(".tmp") or mcap_path.name.endswith(".part") or not mcap_path.name.endswith(".mcap"):
             return None
 
         start_time = time.time()
