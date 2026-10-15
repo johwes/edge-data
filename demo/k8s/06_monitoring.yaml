@@ -38,6 +38,12 @@ spec:
       app.kubernetes.io/name: edge-data-triage
       app.kubernetes.io/component: triage-worker
 ---
+# Production Security Note:
+# This demo Route is unauthenticated for zero-friction stakeholder presentation.
+# For production edge clusters, gate external access using:
+#   1. OpenShift OAuth Proxy (oauth-proxy sidecar) or OpenShift Ingress mTLS
+#   2. kube-rbac-proxy for /metrics endpoint RBAC enforcement
+#   3. NetworkPolicy restricting port 8080 ingress to authorized operations subnets
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:

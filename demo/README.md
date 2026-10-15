@@ -49,6 +49,7 @@ First, establish your OpenShift project context:
 
 ```bash
 # Option A: If using an existing pre-assigned project (e.g. cloud / shared clusters):
+# SKIP 00_namespace.yaml (avoids cluster-scope permission errors or creating an unused namespace)
 oc project rhn-sa-jwesterl-dev   # Replace with your assigned project name
 oc apply -f demo/k8s/00_rbac.yaml
 
