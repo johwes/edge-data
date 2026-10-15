@@ -23,7 +23,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: simulator
-          image: image-registry.openshift-image-registry.svc:5000/rhn-sa-jwesterl-dev/edge-triage-engine:latest
+          image: edge-triage-engine:latest
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false

@@ -4,6 +4,9 @@ metadata:
   name: edge-triage-engine
   labels:
     app.kubernetes.io/name: edge-data-triage
+spec:
+  lookupPolicy:
+    local: true
 ---
 apiVersion: build.openshift.io/v1
 kind: BuildConfig

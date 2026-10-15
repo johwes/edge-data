@@ -326,16 +326,24 @@ Follow these steps to run the complete demonstration:
 
 ### Step 1: Create Namespace and Storage
 ```bash
-kubectl apply -f demo/k8s/00_namespace.yaml
-kubectl apply -f demo/k8s/01_storage_classes.yaml
-kubectl apply -f demo/k8s/02_persistent_volumes.yaml
-kubectl apply -f demo/k8s/03_triage_configmap.yaml
+# If using a dedicated namespace:
+oc apply -f demo/k8s/00_namespace.yaml
+oc project edge-triage
+# (Or switch to your existing project: oc project <my-namespace>)
+
+# Storage Classes:
+# If running with NetApp Trident, apply 01_storage_classes.yaml.
+# If running on cloud (AWS ROSA, Azure ARO, GCP) or without Trident, skip 01.
+# 02_persistent_volumes.yaml will automatically bind to your cluster's default RWX class
+# (or uncomment 'efs-sc' / 'azurefile-csi' / 'standard-rwx' in 02).
+oc apply -f demo/k8s/02_persistent_volumes.yaml
+oc apply -f demo/k8s/03_triage_configmap.yaml
 ```
 
 ### Step 2: Build the Container Image in OpenShift
 ```bash
 oc apply -f demo/k8s/07_buildconfig.yaml
-oc start-build edge-triage-builder --from-dir=demo/src --follow -n edge-triage
+oc start-build edge-triage-builder --from-dir=demo/src --follow
 ```
 
 ### Step 3: Deploy the Triage Worker and Prometheus Monitoring
@@ -352,10 +360,10 @@ oc apply -f demo/k8s/05_simulator_job.yaml
 ### Step 5: Observe Live Reduction in Logs and OpenShift Web Console
 ```bash
 # Follow the live triage engine logs
-oc logs -n edge-triage -l app.kubernetes.io/component=triage-worker -f
+oc logs -l app.kubernetes.io/component=triage-worker -f
 
-# Verify curated packages on the NetApp Curated Volume
-oc exec -n edge-triage deploy/edge-triage-worker -- ls -lh /mnt/gds_curated
+# Verify curated packages and extracted incident clips on the Curated Volume
+oc exec deploy/edge-triage-worker -- ls -lh /mnt/gds_curated
 ```
-In the OpenShift Web Console under **Observe -> Metrics**, query `edge_triage_reduction_percentage` to observe the live 99% data volume reduction graph.
+In the OpenShift Web Console under **Observe -> Metrics**, query `edge_triage_reduction_percentage` to observe the live data volume reduction graph (~84% - 99% depending on novelty distribution).
 

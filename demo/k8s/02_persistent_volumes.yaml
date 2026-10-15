@@ -32,7 +32,11 @@ metadata:
 spec:
   accessModes:
     - ReadWriteMany
-  storageClassName: efs-sc  # Bound to AWS EFS CSI for AWS ROSA / OCP clusters
+  # storageClassName: ""  # Omit to bind to cluster default RWX class, or specify:
+  #   - "efs-sc"          # AWS ROSA / EFS CSI
+  #   - "azurefile-csi"   # Azure ARO
+  #   - "standard-rwx"    # GCP Filestore / ODF
+  #   - "ontap-nas"       # NetApp Astra Trident
   resources:
     requests:
       storage: 10Gi
@@ -50,7 +54,11 @@ metadata:
 spec:
   accessModes:
     - ReadWriteMany
-  storageClassName: efs-sc  # Bound to AWS EFS CSI for AWS ROSA / OCP clusters
+  # storageClassName: ""  # Omit to bind to cluster default RWX class, or specify:
+  #   - "efs-sc"          # AWS ROSA / EFS CSI
+  #   - "azurefile-csi"   # Azure ARO
+  #   - "standard-rwx"    # GCP Filestore / ODF
+  #   - "ontap-nas"       # NetApp Astra Trident
   resources:
     requests:
       storage: 5Gi
