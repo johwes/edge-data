@@ -427,6 +427,15 @@
           if (!currentVideo && data.videos.length > 0) {
             playVideo(data.videos[0].url, data.videos[0].name);
           }
+        } else {
+          videoList.innerHTML = '<div style="color: var(--text-muted); padding: 12px; text-align: center;">Waiting for incoming vehicle offload...</div>';
+          player.removeAttribute('src');
+          player.load();
+          currentVideo = null;
+          document.getElementById('meta-event-id').innerText = 'None';
+          document.getElementById('meta-context').innerText = 'Awaiting triage stream...';
+          document.getElementById('active-tier-badge').innerText = 'Idle';
+          document.getElementById('active-tier-badge').className = 'badge';
         }
 
         // Update Curated Files
@@ -444,6 +453,9 @@
             `;
             curatedContainer.appendChild(item);
           });
+        } else {
+          document.getElementById('curated-count-badge').innerText = '0 Packages';
+          curatedContainer.innerHTML = '<div style="color: var(--text-muted); padding: 12px; text-align: center;">Waiting for incoming telemetry...</div>';
         }
       } catch (err) {
         console.error('Failed to fetch status:', err);

@@ -33,7 +33,8 @@ else
   echo "      Warning: No worker pod found yet. Storage reset skipped."
 fi
 
-echo "[3/4] Checking worker health and readiness..."
+echo "[3/4] Resetting triage engine metrics and restarting worker..."
+"$OC_BIN" rollout restart deployment/edge-triage-worker
 "$OC_BIN" rollout status deployment/edge-triage-worker --timeout=60s
 
 echo "[4/4] Retrieving live Web Dashboard URL..."
