@@ -2,7 +2,6 @@ apiVersion: image.openshift.io/v1
 kind: ImageStream
 metadata:
   name: edge-triage-engine
-  namespace: edge-triage
   labels:
     app.kubernetes.io/name: edge-data-triage
 ---
@@ -10,7 +9,6 @@ apiVersion: build.openshift.io/v1
 kind: BuildConfig
 metadata:
   name: edge-triage-builder
-  namespace: edge-triage
   labels:
     app.kubernetes.io/name: edge-data-triage
 spec:

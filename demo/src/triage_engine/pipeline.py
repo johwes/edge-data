@@ -22,6 +22,17 @@ try:
 except ImportError:
     H3_AVAILABLE = False
 
+try:
+    import numpy as np
+    NUMPY_AVAILABLE = True
+except ImportError:
+    NUMPY_AVAILABLE = False
+
+def to_vector(v: List[float]) -> Any:
+    if NUMPY_AVAILABLE:
+        return np.array(v, dtype=np.float32)
+    return v
+
 from mcap.reader import make_reader
 from mcap.writer import Writer
 
@@ -161,6 +172,7 @@ def extract_video_clip(
             "-to", f"{end_sec:.2f}",
             "-i", str(raw_video_path),
             "-c", "copy",
+            "-f", "mp4",
             str(tmp_clip)
         ]
     else:
@@ -173,6 +185,7 @@ def extract_video_clip(
             "-c:v", "mpeg4",
             "-q:v", "5",
             "-pix_fmt", "yuv420p",
+            "-f", "mp4",
             str(tmp_clip)
         ]
 
@@ -246,12 +259,12 @@ class TriagePipeline:
                     )
                 else:
                     logger.info("Initializing fresh USearch SIMD-accelerated HNSW index on CPU (128-D, metric=cos)...")
-                    self.usearch_index.add(0, [0.0] * self.vector_dim)
+                    self.usearch_index.add(0, to_vector([0.0] * self.vector_dim))
                     self.usearch_index.save(str(self.local_index_path))
             except Exception as err:
                 logger.warning(f"Could not load/save persistent USearch index at {self.local_index_path}: {err}")
                 if len(self.usearch_index) == 0:
-                    self.usearch_index.add(0, [0.0] * self.vector_dim)
+                    self.usearch_index.add(0, to_vector([0.0] * self.vector_dim))
         else:
             logger.warning("USearch library not available; using native Python vector search fallback.")
             self.usearch_index = None
@@ -402,7 +415,7 @@ class TriagePipeline:
         novelty_dist = 0.0
         if f3_cfg.enabled and embedding and len(embedding) == self.vector_dim:
             if USEARCH_AVAILABLE and self.usearch_index is not None:
-                matches = self.usearch_index.search(embedding, 1)
+                matches = self.usearch_index.search(to_vector(embedding), 1)
                 if len(matches) > 0:
                     novelty_dist = float(matches.distances[0])
             else:
@@ -474,7 +487,7 @@ class TriagePipeline:
 
             self.coreset_buffer.append((ts, coords, embedding))
             if USEARCH_AVAILABLE and self.usearch_index is not None and embedding:
-                self.usearch_index.add(len(self.coreset_buffer), embedding)
+                self.usearch_index.add(len(self.coreset_buffer), to_vector(embedding))
                 try:
                     self.usearch_index.save(str(self.local_index_path))
                 except Exception as err:

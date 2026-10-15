@@ -2,7 +2,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: edge-triage-worker
-  namespace: edge-triage
   labels:
     app.kubernetes.io/name: edge-data-triage
     app.kubernetes.io/component: triage-worker
@@ -27,7 +26,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: triage-worker
-          image: image-registry.openshift-image-registry.svc:5000/edge-triage/edge-triage-engine:latest
+          image: edge-triage-engine:latest
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false

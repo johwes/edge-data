@@ -2,7 +2,6 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: fleet-telemetry-simulator
-  namespace: edge-triage
   labels:
     app.kubernetes.io/name: edge-data-triage
     app.kubernetes.io/component: simulator
@@ -24,7 +23,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: simulator
-          image: image-registry.openshift-image-registry.svc:5000/edge-triage/edge-triage-engine:latest
+          image: image-registry.openshift-image-registry.svc:5000/rhn-sa-jwesterl-dev/edge-triage-engine:latest
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false

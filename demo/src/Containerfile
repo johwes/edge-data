@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi9/python-311:1-88
+FROM registry.access.redhat.com/ubi9/python-311:1
 
 LABEL maintainer="Edge Architecture Team" \
       io.k8s.description="Enterprise Edge Data Triage & Deduplication Engine" \
@@ -11,14 +11,17 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt && \
+    mkdir -p /opt/app-root/bin && \
     if python3 -c "import imageio_ffmpeg" 2>/dev/null; then \
         FFMPEG_BIN=$(python3 -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())"); \
-        chmod 755 "$FFMPEG_BIN" && ln -sf "$FFMPEG_BIN" /usr/local/bin/ffmpeg; \
+        chmod 755 "$FFMPEG_BIN" && ln -sf "$FFMPEG_BIN" /opt/app-root/bin/ffmpeg; \
     fi
 
 # Copy application source
 COPY triage_engine/ ./triage_engine/
 COPY simulator/ ./simulator/
+
+USER 0
 
 # Support OpenShift arbitrary UID restricted SCC (group 0 write access)
 # Pre-seed /tmp/healthy so container passes initial healthcheck prior to process start

@@ -55,6 +55,7 @@ def generate_synthetic_video_stream(output_path: Path, duration_sec: int = 30) -
         "-c:v", "mpeg4",
         "-q:v", "5",
         "-pix_fmt", "yuv420p",
+        "-f", "mp4",
         str(tmp_path)
     ]
     try:
