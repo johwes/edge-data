@@ -37,3 +37,21 @@ spec:
     matchLabels:
       app.kubernetes.io/name: edge-data-triage
       app.kubernetes.io/component: triage-worker
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: edge-triage-dashboard
+  labels:
+    app.kubernetes.io/name: edge-data-triage
+    app.kubernetes.io/component: triage-worker
+spec:
+  to:
+    kind: Service
+    name: edge-triage-metrics
+  port:
+    targetPort: metrics
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+

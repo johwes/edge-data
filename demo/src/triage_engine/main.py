@@ -71,19 +71,18 @@ def main():
     logger.info(f"   Metrics Port:     {metrics_port}")
     logger.info("======================================================")
 
-    # 1. Start Prometheus metrics endpoint
-    try:
-        init_metrics(metrics_port)
-        logger.info(f"Prometheus metrics server active at http://0.0.0.0:{metrics_port}/metrics")
-    except Exception as e:
-        logger.error(f"Failed to start metrics server on port {metrics_port}: {e}")
+    raw_ingest_path.mkdir(parents=True, exist_ok=True)
+    gds_curated_path.mkdir(parents=True, exist_ok=True)
 
-    # 2. Initialize Config and Pipeline
+    # 1. Initialize Config and Pipeline
     watcher = ConfigWatcher(config_path)
     pipeline = TriagePipeline(watcher.policy)
 
-    raw_ingest_path.mkdir(parents=True, exist_ok=True)
-    gds_curated_path.mkdir(parents=True, exist_ok=True)
+    # 2. Start Unified Web Dashboard & Prometheus Metrics endpoint
+    try:
+        init_metrics(metrics_port, curated_dir=gds_curated_path, pipeline=pipeline)
+    except Exception as e:
+        logger.error(f"Failed to start web & metrics server on port {metrics_port}: {e}")
 
     health_file = Path("/tmp/healthy")
     health_file.touch()
