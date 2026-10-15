@@ -128,10 +128,17 @@ def extract_video_clip(
     trigger_sec: float = 15.0,
     window_sec: float = 10.0,
     target_fps: int = 10,
+    stream_copy: bool = False,
 ) -> Optional[int]:
     """
     Extracts a temporal incident window ([trigger - window/2, trigger + window/2])
-    from a raw camera video stream and decimates to target_fps (Specification 02).
+    from a raw camera video stream.
+
+    Modes:
+      - stream_copy=True: Stream copy (-c copy) on keyframe GOP boundaries with near-zero CPU overhead.
+        Ideal for multi-camera 4K production scale on edge CPU without dedicated GPU acceleration.
+      - stream_copy=False: Decimates to target_fps (Specification 02) via universal mpeg4 encoder.
+        Ideal for standard CPU edge clusters where frame-rate reduction is mandatory.
     Returns the size of the extracted clip in bytes, or None on failure.
     """
     ffmpeg_exe = find_ffmpeg_executable()
@@ -147,24 +154,35 @@ def extract_video_clip(
     end_sec = start_sec + window_sec
     tmp_clip = output_clip_path.with_suffix(".mp4.tmp")
 
-    cmd = [
-        ffmpeg_exe, "-y",
-        "-ss", f"{start_sec:.2f}",
-        "-to", f"{end_sec:.2f}",
-        "-i", str(raw_video_path),
-        "-r", str(target_fps),
-        "-c:v", "mpeg4",
-        "-q:v", "5",
-        "-pix_fmt", "yuv420p",
-        str(tmp_clip)
-    ]
+    if stream_copy:
+        cmd = [
+            ffmpeg_exe, "-y",
+            "-ss", f"{start_sec:.2f}",
+            "-to", f"{end_sec:.2f}",
+            "-i", str(raw_video_path),
+            "-c", "copy",
+            str(tmp_clip)
+        ]
+    else:
+        cmd = [
+            ffmpeg_exe, "-y",
+            "-ss", f"{start_sec:.2f}",
+            "-to", f"{end_sec:.2f}",
+            "-i", str(raw_video_path),
+            "-r", str(target_fps),
+            "-c:v", "mpeg4",
+            "-q:v", "5",
+            "-pix_fmt", "yuv420p",
+            str(tmp_clip)
+        ]
 
     try:
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
         os.replace(tmp_clip, output_clip_path)
         clip_size = output_clip_path.stat().st_size
         logger.info(
-            f"[Video] Extracted {window_sec:.0f}s incident clip @ {target_fps} FPS: {output_clip_path.name} "
+            f"[Video] Extracted {window_sec:.0f}s incident clip "
+            f"({'stream-copy' if stream_copy else f'{target_fps} FPS'}): {output_clip_path.name} "
             f"({clip_size/1024:.1f} KB, t=[{start_sec:.1f}s..{end_sec:.1f}s])."
         )
         return clip_size
@@ -213,12 +231,27 @@ class TriagePipeline:
         self.total_curated_bytes = 0
         self.curated_tier_bytes: Dict[str, int] = defaultdict(int)
         
-        # Initialize USearch CPU-accelerated index (128-D Cosine)
+        # Initialize USearch CPU-accelerated index (128-D Cosine) with persistence
         self.vector_dim = policy.filter_3_novelty.vector_dim
+        self.local_index_path = Path(policy.filter_3_novelty.local_index_path)
         if USEARCH_AVAILABLE:
-            logger.info("Initializing USearch SIMD-accelerated HNSW index on CPU (128-D, metric=cos)...")
             self.usearch_index = Index(ndim=self.vector_dim, metric="cos")
-            self.usearch_index.add(0, [0.0] * self.vector_dim)
+            try:
+                self.local_index_path.parent.mkdir(parents=True, exist_ok=True)
+                if self.local_index_path.exists() and self.local_index_path.stat().st_size > 0:
+                    self.usearch_index.load(str(self.local_index_path))
+                    logger.info(
+                        f"Restored USearch HNSW vector index ({len(self.usearch_index)} vectors) "
+                        f"from persistent cache {self.local_index_path}"
+                    )
+                else:
+                    logger.info("Initializing fresh USearch SIMD-accelerated HNSW index on CPU (128-D, metric=cos)...")
+                    self.usearch_index.add(0, [0.0] * self.vector_dim)
+                    self.usearch_index.save(str(self.local_index_path))
+            except Exception as err:
+                logger.warning(f"Could not load/save persistent USearch index at {self.local_index_path}: {err}")
+                if len(self.usearch_index) == 0:
+                    self.usearch_index.add(0, [0.0] * self.vector_dim)
         else:
             logger.warning("USearch library not available; using native Python vector search fallback.")
             self.usearch_index = None
@@ -230,6 +263,7 @@ class TriagePipeline:
     def update_policy(self, new_policy: TriagePolicy):
         self.policy = new_policy
         self.cell_id = new_policy.cell_id
+        self.local_index_path = Path(new_policy.filter_3_novelty.local_index_path)
 
     def process_mcap_file(self, mcap_path: Path, output_dir: Path) -> Optional[Path]:
         if mcap_path.name.endswith(".tmp") or not mcap_path.name.endswith(".mcap"):
@@ -270,6 +304,19 @@ class TriagePipeline:
                     else:
                         sensor_messages[topic] = message.data
         except Exception as e:
+            mtime_age = 999.0
+            try:
+                mtime_age = time.time() - mcap_path.stat().st_mtime
+            except OSError:
+                pass
+
+            if mtime_age < 5.0:
+                logger.warning(
+                    f"MCAP file {mcap_path.name} is temporarily unreadable ({e}) but was modified {mtime_age:.1f}s ago; "
+                    f"deferring without deletion (likely in-flight transfer)."
+                )
+                return None
+
             logger.error(f"Corrupt or unreadable MCAP file {mcap_path}: {e}")
             EVENTS_DISCARDED.labels(cell_id=self.cell_id, filter_reason="corrupt_mcap").inc()
             mcap_path.unlink(missing_ok=True)
@@ -419,6 +466,10 @@ class TriagePipeline:
             self.coreset_buffer.append((ts, coords, embedding))
             if USEARCH_AVAILABLE and self.usearch_index is not None and embedding:
                 self.usearch_index.add(len(self.coreset_buffer), embedding)
+                try:
+                    self.usearch_index.save(str(self.local_index_path))
+                except Exception as err:
+                    logger.debug(f"Failed to persist USearch index update: {err}")
 
         # ---------------------------------------------------------
         # Quota Governance & Preemption Order (Specification 01 §6.4)
@@ -502,6 +553,11 @@ class TriagePipeline:
             writer.add_message(channel_id=ch_meta, log_time=now_ns, data=json.dumps(meta).encode("utf-8"), publish_time=now_ns)
 
             # Apply Specification 02 Channel Pruning and Decimation Mask
+            # BENCHMARK SIMULATION NOTE: In this demo benchmark, sensor payloads are opaque binary buffers,
+            # so decimation is achieved via byte-slice proxy (:slice_len) matching the calibrated demo math (~360 KB/event).
+            # In industrial production with ROS 2 / Protobuf schemas (sensor_msgs/msg/CompressedImage, PointCloud2),
+            # decimation operates at message cadence (e.g. iterating channel messages and writing every 3rd camera frame
+            # for 30->10 FPS decimation, and quantizing point-cloud coordinate floats to 16-bit fixed point).
             channel_handles = {}
             for topic, raw_bytes in sensor_messages.items():
                 if is_reversing:
@@ -538,12 +594,15 @@ class TriagePipeline:
             trigger_sec = float(meta.get("video_trigger_second", 15.0))
             clip_name = f"gds_curated_{event_id}_clip_10s_10fps.mp4"
             curated_clip_path = output_dir / clip_name
+            # Supports optional VIDEO_STREAM_COPY=true for 4K zero-CPU GOP stream-copy
+            stream_copy = os.getenv("VIDEO_STREAM_COPY", "false").lower() in ("true", "1", "yes")
             extracted_size = extract_video_clip(
                 raw_video_path=raw_vid_path,
                 output_clip_path=curated_clip_path,
                 trigger_sec=trigger_sec,
                 window_sec=10.0,
                 target_fps=10,
+                stream_copy=stream_copy,
             )
             if extracted_size:
                 video_clip_bytes = extracted_size

@@ -25,6 +25,29 @@ def handle_signal(sig, frame):
 signal.signal(signal.SIGINT, handle_signal)
 signal.signal(signal.SIGTERM, handle_signal)
 
+def is_file_transfer_complete(file_path: Path, min_settle_sec: float = 2.0) -> bool:
+    """
+    Verifies that an incoming telemetry file has completed transfer over NFS/storage.
+    Prevents reading partial files while vehicles or offload daemons are still writing.
+    Checks:
+      1. Ignores active temporary extensions (.tmp, .part).
+      2. If a .ready or .complete sidecar marker exists, confirms completion.
+      3. Otherwise, verifies file mtime has settled (age >= min_settle_sec).
+    """
+    if file_path.name.endswith(".tmp") or file_path.name.endswith(".part"):
+        return False
+
+    # Check for discrete completion sidecars
+    if file_path.with_suffix(".ready").exists() or file_path.with_suffix(".complete").exists():
+        return True
+
+    # Settle time check: ensure mtime is older than min_settle_sec
+    try:
+        mtime_age = time.time() - file_path.stat().st_mtime
+        return mtime_age >= min_settle_sec
+    except OSError:
+        return False
+
 def main():
     config_path = os.getenv("CONFIG_PATH", "/etc/triage-config/triage_policy.yaml")
     raw_ingest_path = Path(os.getenv("RAW_INGEST_PATH", "/mnt/raw_ingest"))
@@ -67,16 +90,20 @@ def main():
             # Touch health file for liveness/readiness
             health_file.touch()
 
-            # Find incoming MCAP files
-            mcap_files = sorted(
+            # Find incoming MCAP files and filter for settled offloads
+            all_mcap = sorted(
                 list(raw_ingest_path.glob("**/*.mcap")),
                 key=lambda p: p.stat().st_mtime
             )
+            mcap_files = [p for p in all_mcap if is_file_transfer_complete(p)]
 
             for mcap_file in mcap_files:
                 if not running:
                     break
                 pipeline.process_mcap_file(mcap_file, gds_curated_path)
+                # Clean up any sidecars associated with processed MCAP
+                mcap_file.with_suffix(".ready").unlink(missing_ok=True)
+                mcap_file.with_suffix(".complete").unlink(missing_ok=True)
 
             time.sleep(1.0)
         except Exception as e:

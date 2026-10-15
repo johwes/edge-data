@@ -108,6 +108,6 @@ spec:
           configMap:
             name: triage-policy
         - name: cache-volume
-          emptyDir: {}
+          emptyDir: {}  # In production, replace with an RWO PVC to preserve learned USearch novelty vectors across pod rescheduling
         - name: tmp-volume
           emptyDir: {}

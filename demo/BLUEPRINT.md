@@ -140,8 +140,12 @@ If any filter flags a candidate snippet, it enters fleet deduplication:
 ### 3.4 Stage 4: Representation Reduction & Safety Exceptions (Spec 02)
 * **Temporal Slicing & FFmpeg Incident Video Extraction:**
   * **MCAP Telemetry Slicing:** Extracts exactly $T - 30\text{s}$ pre-trigger (root cause onset) to $T + 15\text{s}$ post-trigger (stopping stabilization).
-  * **In-Container FFmpeg Video Slicing & Decimation:** When a safety-critical trigger fires (e.g. AEB near-miss, reversing maneuver), the triage engine invokes FFmpeg to slice an incident window $[T - 5\text{s}, T + 5\text{s}]$ (10 seconds total) from the raw camera buffer. The video stream is decimated from 30 FPS down to 10 FPS (matching Specification 02) and encoded into an open, universally playable MP4 (`mpeg4`/`yuv420p`), outputting `gds_curated_<event_id>_clip_10s_10fps.mp4` directly into `/mnt/gds_curated`. This produces an immediate, lightweight (~180 KB) video artifact playable in VLC or browser without requiring ROS2/Foxglove tooling.
-  * **Ingest Buffer Eviction:** The raw un-decimated rolling video buffer (~1.25 MB) is automatically purged from `/mnt/raw_ingest`.
+  * **In-Container FFmpeg Video Slicing:** When a safety-critical trigger fires (e.g. AEB near-miss, reversing maneuver), the triage engine invokes FFmpeg to slice an incident window $[T - 5\text{s}, T + 5\text{s}]$ (10 seconds total) from the raw camera buffer, outputting `gds_curated_<event_id>_clip_10s_10fps.mp4` directly into `/mnt/gds_curated` for immediate playback in VLC or browser without requiring ROS 2 / Foxglove tooling.
+  * **Production Video Scaling Paths (CPU vs. GPU vs. Stream Copy):**
+    * *Zero-CPU Stream Copy (`-c copy`):* When vehicle cameras record with fixed 1-second GOPs (Group of Pictures), the worker pipeline uses stream-copy (`-c copy`) on keyframe boundaries. This achieves near-zero CPU overhead even across multiple concurrent 4K (8MP @ 30 FPS) streams. Toggleable via `VIDEO_STREAM_COPY=true`.
+    * *Hardware GPU Decimation Offload:* If frame-rate decimation (30 $\rightarrow$ 10 FPS) is mandatory for 4K video to meet WAN/satellite quotas, offload decoding, filtering, and re-encoding to an edge GPU (e.g., NVIDIA L4 / T4) via the **OpenShift NVIDIA GPU Operator** using hardware-accelerated filters (`-c:v h264_cuvid -r 10 -c:v h264_nvenc`).
+    * *Lightweight CPU Software Transcode:* In standard compact 3-node CPU edge clusters (as featured in this demo), the pipeline utilizes universal `mpeg4`/`yuv420p` encoding, completing decimation in ~30ms without proprietary codec licensing.
+  * **Ingest Buffer Eviction:** The raw un-decimated rolling video buffer (~1.25 MB demo / ~250 MB prod) is automatically purged from `/mnt/raw_ingest`.
 * **Canonical Sensor Stream IDs & Frustum Pruning:**
   * `/sensors/cam_front_center_8mp`: **KEEP & DECIMATE** (30 $\rightarrow$ 10 FPS, ~35% bytes)
   * `/sensors/cam_front_telephoto_8mp`: **KEEP & DECIMATE** (Forward) / **DROP** (Reversing)
@@ -156,10 +160,21 @@ If any filter flags a candidate snippet, it enters fleet deduplication:
   * `/perception/embedding_128d`: **KEEP** (Latent feature vectors for vector index querying)
   * `/metadata`: **KEEP** (Event ID, truck ID, GPS coordinates, timestamps, tier assignment)
 * **Reversing & Hopper Maneuvering Exception:** If CAN powertrain signals reverse gear (`gear_reverse_active: true`) or geofencing locates the truck within a dump pocket or crusher hopper, the pruning mask dynamically flips: `/sensors/cam_rear_perimeter_4mp`, `/sensors/lidar_perimeter_solid_state`, `/sensors/radar_perimeter_rear`, `/sensors/radar_blind_spot_side_left`, and `/sensors/radar_blind_spot_side_right` are promoted to **KEEP** at native resolution (80% payload) to prevent hopper wall collisions and articulated jackknifing, while forward auxiliary channels are decimated.
-* **Perceptual Decimation:** Decimates camera frames from 30 FPS down to 10 FPS for archival serialization (66% volume reduction). Converts LiDAR 32-bit floats to 16-bit fixed-point coordinates (50% vertex payload reduction).
+* **Perceptual Decimation (Benchmark Proxy vs. Production ROS 2):**
+  * *Benchmark Simulation Proxy:* The demo pipeline uses a deterministic byte-slice proxy (`raw_bytes[:slice_len]`) on opaque synthetic payloads to reproduce the exact target volume reductions (~35% forward, ~80% reversing) without requiring gigabytes of ROS 2 / Protobuf / Foxglove schema dependencies on test clusters.
+  * *Industrial Production Implementation:* In real-world autonomous haulage, decimation operates at the **structured message cadence level**:
+    * **Camera Feeds:** Iterates through individual channel frames and sub-samples cadence (e.g. writing every 3rd message for 30 FPS $\rightarrow$ 10 FPS downsampling of `sensor_msgs/msg/CompressedImage`).
+    * **LiDAR Point Clouds:** Deserializes `sensor_msgs/msg/PointCloud2` fields, crops out-of-ODD returns ($r > 100\text{m}$), and quantizes IEEE 754 32-bit float coordinates down to 16-bit fixed-point integers (50% vertex payload reduction).
 * **Metadata Schema Emission:** Generates a standardized `gds_metadata_v2.json` record capturing software manifests, SA.45s CSAC clock telemetry (`PTP_HOLDOVER_ACTIVE`, 112 ns drift), filter scores, embedding vector, and optical dock metrics.
 
-### 3.5 End-to-End I/O Math Closure (Production Scale vs. Demo Benchmark)
+### 3.5 Ingestion Handshake & Offload Atomicity (NFS / Trident)
+Multi-gigabyte vehicle recordings landing across 10G optical wireless berths or NFS mounts require strict atomic handshakes to prevent reading partial or in-flight writes:
+* **Temporary Suffix Masking:** Upstream offload agents (rsync, Zenoh, MinIO) write to `.mcap.tmp` or `.mcap.part` before atomically renaming to `.mcap`.
+* **Discrete Completion Sidecars:** The worker recognizes `.ready` or `.complete` sidecar files (`<event_id>.mcap.ready`), guaranteeing offload finalization.
+* **Mtime Settle-Time Buffer:** In environments without sidecars, the worker enforces a minimum settle time ($\ge 2.0\text{s}$ unmodified) before claiming an `.mcap` file.
+* **Non-Destructive In-Flight Protection:** If an MCAP parser encounters incomplete chunk headers on a file modified within the last 5.0 seconds, it defers processing without deleting (`unlink`), ensuring active transfers are never corrupted.
+
+### 3.6 End-to-End I/O Math Closure (Production Scale vs. Demo Benchmark)
 * **Production Fleet Scale:**
   * **Input Volume (100 vehicle events):** 100 raw 45s events @ 1.6 to 2.7 GB unpruned = **~160 to 270 GB raw ingest**.
   * **Stage 1 & 2 Filtering:** 91 nominal events discarded. 9 candidate anomaly events flagged. Filter 6 deduplicates cross-truck encounters.
