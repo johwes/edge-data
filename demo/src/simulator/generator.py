@@ -48,28 +48,39 @@ def generate_synthetic_video_stream(output_path: Path, duration_sec: int = 30) -
         logger.warning("FFmpeg executable not available; skipping raw video stream generation.")
         return False
     tmp_path = output_path.with_suffix(".mp4.tmp")
-    cmd = [
-        ffmpeg_exe, "-y",
-        "-f", "lavfi",
-        "-i", f"testsrc=duration={duration_sec}:size=640x360:rate=30",
-        "-c:v", "mpeg4",
-        "-q:v", "5",
-        "-pix_fmt", "yuv420p",
-        "-f", "mp4",
-        str(tmp_path)
-    ]
-    try:
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-        os.replace(tmp_path, output_path)
-        logger.info(
-            f"Generated rolling {duration_sec}s camera video buffer: {output_path.name} "
-            f"({output_path.stat().st_size / 1024:.1f} KB @ 30 FPS)."
-        )
-        return True
-    except Exception as e:
-        logger.error(f"Failed to generate synthetic video stream via ffmpeg: {e}")
-        tmp_path.unlink(missing_ok=True)
-        return False
+    
+    # Try browser-native H.264 (libx264) with faststart first, fallback to mpeg4
+    for codec, extra_opts in [
+        ("libx264", ["-preset", "ultrafast", "-tune", "zerolatency"]),
+        ("mpeg4", ["-q:v", "5"])
+    ]:
+        cmd = [
+            ffmpeg_exe, "-y",
+            "-f", "lavfi",
+            "-i", f"testsrc=duration={duration_sec}:size=640x360:rate=30",
+            "-c:v", codec,
+            *extra_opts,
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            "-f", "mp4",
+            str(tmp_path)
+        ]
+        try:
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            os.replace(tmp_path, output_path)
+            logger.info(
+                f"Generated rolling {duration_sec}s camera video buffer: {output_path.name} "
+                f"({output_path.stat().st_size / 1024:.1f} KB @ 30 FPS, codec={codec})."
+            )
+            return True
+        except Exception as e:
+            tmp_path.unlink(missing_ok=True)
+            if codec == "libx264":
+                logger.debug(f"libx264 unavailable ({e}); retrying with fallback codec.")
+                continue
+            logger.error(f"Failed to generate synthetic video stream via ffmpeg: {e}")
+            return False
+    return False
 
 def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload_kb_per_event: int = 1024):
     output_dir.mkdir(parents=True, exist_ok=True)

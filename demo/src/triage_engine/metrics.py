@@ -69,6 +69,7 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
 class UnifiedMetricsHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
     curated_dir: Path = Path("/mnt/gds_curated")
     pipeline_ref: Optional[Any] = None
 
@@ -229,6 +230,7 @@ class UnifiedMetricsHandler(BaseHTTPRequestHandler):
                 if start >= file_size or end >= file_size or start > end:
                     self.send_response(416)
                     self.send_header("Content-Range", f"bytes */{file_size}")
+                    self.send_header("Access-Control-Allow-Origin", "*")
                     self.end_headers()
                     return
                 length = end - start + 1
@@ -237,21 +239,41 @@ class UnifiedMetricsHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
                 self.send_header("Content-Length", str(length))
                 self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Cache-Control", "no-cache")
                 self.end_headers()
                 if not head_only:
-                    with open(file_path, "rb") as f:
-                        f.seek(start)
-                        self.wfile.write(f.read(length))
+                    try:
+                        with open(file_path, "rb") as f:
+                            f.seek(start)
+                            remaining = length
+                            while remaining > 0:
+                                chunk = f.read(min(remaining, 65536))
+                                if not chunk:
+                                    break
+                                self.wfile.write(chunk)
+                                remaining -= len(chunk)
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
                 return
 
         self.send_response(200)
         self.send_header("Content-Type", "video/mp4")
         self.send_header("Content-Length", str(file_size))
         self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         if not head_only:
-            with open(file_path, "rb") as f:
-                self.wfile.write(f.read())
+            try:
+                with open(file_path, "rb") as f:
+                    while True:
+                        chunk = f.read(65536)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
 def init_metrics(port: int = 8080, curated_dir: Optional[Path] = None, pipeline: Optional[Any] = None):
     """Starts the threaded HTTP server serving /metrics, /api/status, /videos/*, and /."""

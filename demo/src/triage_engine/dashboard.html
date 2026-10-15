@@ -283,7 +283,7 @@
       </div>
 
       <div class="video-container">
-        <video id="player" controls autoplay muted playsinline></video>
+        <video id="player" controls autoplay muted playsinline preload="auto"></video>
       </div>
 
       <div class="video-meta">
@@ -463,9 +463,16 @@
     }
 
     function playVideo(url, name) {
+      if (!url) return;
       currentVideo = url;
-      player.src = url;
-      player.play().catch(e => console.log('Autoplay muted requirement:', e));
+      const fullUrl = url.startsWith('http') ? url : window.location.origin + url;
+      if (player.src !== fullUrl && player.src !== url) {
+        player.src = url;
+        player.load();
+      }
+      player.play().catch(e => {
+        console.warn('Autoplay prevented (user interaction required):', e);
+      });
 
       document.querySelectorAll('.video-btn').forEach(b => {
         b.classList.toggle('active', b.innerText.includes(name));

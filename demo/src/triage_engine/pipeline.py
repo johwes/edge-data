@@ -172,36 +172,58 @@ def extract_video_clip(
             "-to", f"{end_sec:.2f}",
             "-i", str(raw_video_path),
             "-c", "copy",
+            "-movflags", "+faststart",
             "-f", "mp4",
             str(tmp_clip)
         ]
+        try:
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            os.replace(tmp_clip, output_clip_path)
+            clip_size = output_clip_path.stat().st_size
+            logger.info(
+                f"[Video] Extracted {window_sec:.0f}s incident clip (stream-copy): {output_clip_path.name} "
+                f"({clip_size/1024:.1f} KB, t=[{start_sec:.1f}s..{end_sec:.1f}s])."
+            )
+            return clip_size
+        except Exception as err:
+            logger.error(f"[Video] FFmpeg stream-copy extraction failed for {raw_video_path.name}: {err}")
+            tmp_clip.unlink(missing_ok=True)
+            return None
     else:
-        cmd = [
-            ffmpeg_exe, "-y",
-            "-ss", f"{start_sec:.2f}",
-            "-to", f"{end_sec:.2f}",
-            "-i", str(raw_video_path),
-            "-r", str(target_fps),
-            "-c:v", "mpeg4",
-            "-q:v", "5",
-            "-pix_fmt", "yuv420p",
-            "-f", "mp4",
-            str(tmp_clip)
-        ]
-
-    try:
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-        os.replace(tmp_clip, output_clip_path)
-        clip_size = output_clip_path.stat().st_size
-        logger.info(
-            f"[Video] Extracted {window_sec:.0f}s incident clip "
-            f"({'stream-copy' if stream_copy else f'{target_fps} FPS'}): {output_clip_path.name} "
-            f"({clip_size/1024:.1f} KB, t=[{start_sec:.1f}s..{end_sec:.1f}s])."
-        )
-        return clip_size
-    except Exception as err:
-        logger.error(f"[Video] FFmpeg extraction failed for {raw_video_path.name}: {err}")
-        tmp_clip.unlink(missing_ok=True)
+        # Decimate FPS with browser-native H.264 (libx264) + faststart, fallback to mpeg4
+        for codec, extra_opts in [
+            ("libx264", ["-preset", "ultrafast", "-tune", "zerolatency"]),
+            ("mpeg4", ["-q:v", "5"])
+        ]:
+            cmd = [
+                ffmpeg_exe, "-y",
+                "-ss", f"{start_sec:.2f}",
+                "-to", f"{end_sec:.2f}",
+                "-i", str(raw_video_path),
+                "-r", str(target_fps),
+                "-c:v", codec,
+                *extra_opts,
+                "-pix_fmt", "yuv420p",
+                "-movflags", "+faststart",
+                "-f", "mp4",
+                str(tmp_clip)
+            ]
+            try:
+                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                os.replace(tmp_clip, output_clip_path)
+                clip_size = output_clip_path.stat().st_size
+                logger.info(
+                    f"[Video] Extracted {window_sec:.0f}s incident clip ({target_fps} FPS, codec={codec}): "
+                    f"{output_clip_path.name} ({clip_size/1024:.1f} KB, t=[{start_sec:.1f}s..{end_sec:.1f}s])."
+                )
+                return clip_size
+            except Exception as err:
+                tmp_clip.unlink(missing_ok=True)
+                if codec == "libx264":
+                    logger.debug(f"libx264 extraction failed ({err}); retrying with fallback codec.")
+                    continue
+                logger.error(f"[Video] FFmpeg decimation failed for {raw_video_path.name}: {err}")
+                return None
         return None
 
 # Canonical Specification 02 Channel Enums
