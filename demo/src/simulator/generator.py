@@ -41,17 +41,37 @@ def find_ffmpeg_executable() -> Optional[str]:
     except Exception:
         return None
 
-def generate_synthetic_video_stream(output_path: Path, duration_sec: int = 30) -> bool:
-    """Generates a synthetic rolling 30 FPS camera video stream using FFmpeg testsrc."""
+def generate_synthetic_video_stream(output_path: Path, duration_sec: int = 30, asset_name: Optional[str] = None) -> bool:
+    """
+    Provisions a rolling 30 FPS camera video stream into output_path.
+    Uses a pre-packaged realistic camera asset from simulator/assets/ when available,
+    falling back to FFmpeg synthetic testsrc generation.
+    """
+    tmp_path = output_path.with_suffix(".mp4.tmp")
+    if asset_name:
+        asset_path = Path(__file__).parent / "assets" / asset_name
+        if asset_path.exists():
+            try:
+                shutil.copyfile(asset_path, tmp_path)
+                os.replace(tmp_path, output_path)
+                logger.info(
+                    f"Loaded realistic {duration_sec}s camera video buffer: {output_path.name} "
+                    f"({output_path.stat().st_size / 1024:.1f} KB @ 30 FPS, H.264)."
+                )
+                return True
+            except Exception as e:
+                tmp_path.unlink(missing_ok=True)
+                logger.warning(f"Failed to copy bundled video asset {asset_path.name}: {e}; falling back to synthetic stream.")
+
     ffmpeg_exe = find_ffmpeg_executable()
     if not ffmpeg_exe:
         logger.warning("FFmpeg executable not available; skipping raw video stream generation.")
         return False
-    tmp_path = output_path.with_suffix(".mp4.tmp")
-    
-    # Try browser-native H.264 (libx264) with faststart first, fallback to mpeg4
+
+    # Try browser-native H.264 (libx264 / libopenh264) with faststart first, fallback to mpeg4
     for codec, extra_opts in [
         ("libx264", ["-preset", "ultrafast", "-tune", "zerolatency"]),
+        ("libopenh264", ["-b:v", "800k"]),
         ("mpeg4", ["-q:v", "5"])
     ]:
         cmd = [
@@ -75,8 +95,8 @@ def generate_synthetic_video_stream(output_path: Path, duration_sec: int = 30) -
             return True
         except Exception as e:
             tmp_path.unlink(missing_ok=True)
-            if codec == "libx264":
-                logger.debug(f"libx264 unavailable ({e}); retrying with fallback codec.")
+            if codec in ("libx264", "libopenh264"):
+                logger.debug(f"{codec} unavailable ({e}); retrying with fallback codec.")
                 continue
             logger.error(f"Failed to generate synthetic video stream via ffmpeg: {e}")
             return False
@@ -251,7 +271,7 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
         "gps": [-22.3340, 119.8140],
         "is_shift_anchor": False,
         "raw_video_filename": vid_rev,
-        "video_trigger_second": 18.0
+        "video_trigger_second": 15.0
     })
 
     # 7. Filter 4 Trigger: Campaign Geofence Entry (Tested via GPS point-in-polygon)
@@ -359,9 +379,17 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
             "is_shift_anchor": False
         })
 
-    # Generate synthetic video files for the incident events
-    generate_synthetic_video_stream(output_dir / vid_f1, duration_sec=30)
-    generate_synthetic_video_stream(output_dir / vid_rev, duration_sec=30)
+    # Provision 30s camera video buffers for the incident events
+    generate_synthetic_video_stream(
+        output_dir / vid_f1,
+        duration_sec=30,
+        asset_name="EVT_F1_AEB_DOWNHILL_001_raw_30s.mp4"
+    )
+    generate_synthetic_video_stream(
+        output_dir / vid_rev,
+        duration_sec=30,
+        asset_name="EVT_REVERSING_HOPPER_MANEUVER_006_raw_30s.mp4"
+    )
 
     # Divide the total payload evenly among the canonical sensor channels
     bytes_per_channel = int((payload_kb_per_event * 1024) / len(CANONICAL_SPEC02_SENSOR_TOPICS))

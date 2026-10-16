@@ -190,9 +190,10 @@ def extract_video_clip(
             tmp_clip.unlink(missing_ok=True)
             return None
     else:
-        # Decimate FPS with browser-native H.264 (libx264) + faststart, fallback to mpeg4
+        # Decimate FPS with browser-native H.264 (libx264 / libopenh264) + faststart, fallback to mpeg4
         for codec, extra_opts in [
-            ("libx264", ["-preset", "ultrafast", "-tune", "zerolatency"]),
+            ("libx264", ["-preset", "fast", "-crf", "23"]),
+            ("libopenh264", ["-b:v", "800k"]),
             ("mpeg4", ["-q:v", "5"])
         ]:
             cmd = [
@@ -210,7 +211,7 @@ def extract_video_clip(
             ]
             try:
                 subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-                os.replace(tmp_clip, output_clip_path)
+                os.replace(tmp_clip, output_path := output_clip_path)
                 clip_size = output_clip_path.stat().st_size
                 logger.info(
                     f"[Video] Extracted {window_sec:.0f}s incident clip ({target_fps} FPS, codec={codec}): "
@@ -219,8 +220,8 @@ def extract_video_clip(
                 return clip_size
             except Exception as err:
                 tmp_clip.unlink(missing_ok=True)
-                if codec == "libx264":
-                    logger.debug(f"libx264 extraction failed ({err}); retrying with fallback codec.")
+                if codec in ("libx264", "libopenh264"):
+                    logger.debug(f"{codec} extraction failed ({err}); retrying with fallback codec.")
                     continue
                 logger.error(f"[Video] FFmpeg decimation failed for {raw_video_path.name}: {err}")
                 return None
