@@ -64,6 +64,91 @@ spec:
                         - tier_3_novelty
                         - tier_2_uncertainty
                         - tier_1_forensic
+                      tier_limits_gb:
+                        tier_1_forensic: "uncapped_preempts_lower_tiers"
+                        tier_2_uncertainty: 8.0
+                        tier_3_novelty: 6.0
+                        tier_4_campaign: 4.0
+                        tier_5_anchor: 2.0
+                    filter_1_deterministic:
+                      enabled: true
+                      baseline:
+                        lateral_accel_g: 0.30
+                        ttc_seconds: 3.0
+                      downhill_grade_adjustment:
+                        grade_threshold_pct: 8.0
+                        lateral_accel_g: 0.20
+                        ttc_seconds: 4.5
+                      trigger_signals:
+                        - aeb_active
+                        - e_stop_active
+                        - operator_takeover
+                        - abs_traction_event
+                        - rollover_warning
+                    filter_2_uncertainty:
+                      enabled: true
+                      detection_confidence_threshold: 0.65
+                      shannon_entropy_threshold: 0.70
+                      temporal_variance_5frame_threshold: 0.04
+                    filter_3_novelty:
+                      enabled: true
+                      vector_dim: 128
+                      similarity_metric: "cosine"
+                      distance_threshold_tau: 0.72
+                      local_index_path: "/var/cache/usearch/baseline_128d.usearch"
+                      daily_vector_sync_mb: 50.0
+                    filter_4_geofence:
+                      enabled: true
+                      active_campaign_id: "blast_zone_regrade_2026_q4"
+                      polygon_coordinates:
+                        - [-22.3150, 119.8210]
+                        - [-22.3150, 119.8290]
+                        - [-22.3220, 119.8290]
+                        - [-22.3220, 119.8210]
+                    filter_5_sampling:
+                      enabled: true
+                      uniform_sampling_rate: 0.001
+                      mandatory_shift_anchor: true
+                    filter_6_dedup:
+                      enabled: true
+                      time_window_seconds: 7200
+                      spatial_radius_meters: 100.0
+                      cosine_similarity_min: 0.90
+                      target_suppression_rate: 0.70
+                    decimation:
+                      nominal:
+                        video_fps: 10
+                        lidar_crop_range_meters: 100.0
+                        radar_range_meters: 150.0
+                      reversing_exception:
+                        trigger: "gear_reverse_active"
+                        promoted_channels:
+                          - /sensors/cam_rear_perimeter_4mp
+                          - /sensors/lidar_perimeter_solid_state
+                          - /sensors/radar_perimeter_rear
+                          - /sensors/radar_blind_spot_side_left
+                          - /sensors/radar_blind_spot_side_right
+                        decimated_forward_channels:
+                          - /sensors/cam_front_center_8mp
+                          - /sensors/cam_front_telephoto_8mp
+                          - /sensors/lidar_128_beam_main
+                          - /sensors/radar_front_long_range
+                  storage_eviction_policy.yaml: |
+                    storage_pool: "raw-ingest-pvc"
+                    high_watermark_pct: 90
+                    low_watermark_pct: 75
+                    check_interval_seconds: 30
+                    eviction_priority:
+                      1: "tier_5_anchor"
+                      2: "tier_4_campaign"
+                      3: "tier_3_novelty"
+                      4: "tier_2_uncertainty"
+                      5: "tier_1_forensic"
+                    wan_outage_behavior:
+                      mode: "local_cache"
+                      pause_cloud_sync: true
+                      freeze_forensic_eviction: true
+                      spillover_notification: "alert_sneakernet_ssd_required"
 ---
 apiVersion: policy.open-cluster-management.io/v1
 kind: PlacementBinding

@@ -14,14 +14,14 @@ You are presenting as the **Autonomous Systems & Edge Infrastructure Architect**
 1. **Act I: The Data Avalanche (The Problem)**  
    An autonomous haul fleet operating 24/7 in an open-pit mine (e.g. *Pilbara Cell 04*) generates **~500 TB/day** of dense LiDAR point clouds, radar, CAN-bus, and 4K camera streams. Satellite (Starlink) and 4G/5G edge bandwidth cannot ship 500 TB/day to AWS or cloud object stores, and storing un-curated routine data wastes millions of dollars annually.
 2. **Act II: The Safety Incident on -9% Grade (The Dramatic Hook)**  
-   During a routine haul shift, autonomous 400-ton haul truck `HT_408` encounters an obstacle while descending a steep **-9% pitch grade**. Forward Time-to-Collision (TTC) plummets, and **Autonomous Emergency Braking (AEB)** engages. Simultaneously, other fleet trucks generate nominal, uneventful haul cycles, and another truck encounters the same intersection 2 minutes later.
+   During a routine haul shift, autonomous 400-ton haul truck `HT_402_400T` (`EVT_F1_AEB_DOWNHILL_001`) encounters an obstacle while descending a steep **-9% pitch grade**. Forward Time-to-Collision (TTC) plummets, and **Autonomous Emergency Braking (AEB)** engages. Simultaneously, other fleet trucks generate nominal, uneventful haul cycles, and another truck encounters the same intersection 3 minutes later.
 3. **Act III: Edge Triage & The Visual Proof (The Payoff)**  
    Running on Red Hat OpenShift directly at the edge offload dock, our 6-filter triage engine:
    - Immediately detects the -9% grade AEB event and classifies it **Tier 1 Forensic** (uncapped quota, zero data loss).
-   - Activates in-container FFmpeg to slice the exact **10-second temporal window** ($T-5\text{s}$ to $T+5\text{s}$) around the brake trigger, decimating it from 30 FPS to 10 FPS (slashing video footprint by ~85% while preserving full forensic fidelity).
+   - Activates in-container FFmpeg to slice the exact **10-second temporal window** ($T-5\text{s}$ to $T+5\text{s}$) around the brake trigger, decimating it from 30 FPS to 10 FPS H.264 MP4 (slashing video footprint by ~85% while preserving full forensic fidelity).
    - Suppresses duplicate sensor frames from following trucks via **Spatiotemporal Coreset Deduplication (Filter 6)**.
    - Discards nominal empty road data at the edge.
-   - **The Bottom Line:** Achieves an **~84–85% reduction** in transferred data volume while preserving 100% of safety-critical evidence.
+   - **The Bottom Line:** Achieves an **~98.0% reduction** in transferred data volume (~106 MB raw ingested $\rightarrow$ ~2.1 MB curated across 8 high-entropy packages and 2 video clips) while preserving 100% of safety-critical evidence.
 
 ---
 
@@ -100,14 +100,14 @@ Switch to the **Browser Window**:
 
 > *"Now let's look at the results on our live OpenShift Dashboard:*
 >
-> * Look at the **Bandwidth Reduction Gauge**: We ingested **108 MB** of raw telemetry, but our curated Golden Data Set is only **17 MB**—an **84.1% reduction** in network payload achieved in under 15 seconds!
-> * Every single event was evaluated in under **60 milliseconds**.
+> * Look at the **Bandwidth Reduction Gauge**: We ingested **~106 MB** of raw telemetry across 100 offload events, and our curated Golden Data Set is only **~2.1 MB** (8 high-value events + 2 forensic video clips)—an **~98.0% reduction** in network payload achieved in seconds!
+> * Every single event was evaluated in sub-millisecond to low-millisecond latency (with FFmpeg video slicing completing in ~150ms).
 >
 > *Now, let's verify the forensic evidence. Right here in the dashboard, I can click on **EVT_F1_AEB_DOWNHILL_001** and press play:*
 >
 > *(Play the 10-second video clip directly in the browser)*
 >
-> *The safety investigator can watch the exact 10 seconds of the downhill emergency braking maneuver. We didn't keep the full 30-second raw file, but we didn't lose any critical context. The video was downsampled to 10 FPS, slashing its size from 1.26 MB down to 190 KB."*
+> *The safety investigator can watch the exact 10 seconds of the downhill emergency braking maneuver. We didn't keep the full 30-second raw file, but we didn't lose any critical context. The video was downsampled to 10 FPS H.264, slashing its size from 1.26 MB down to ~190 KB."*
 
 ---
 
@@ -118,7 +118,7 @@ Switch to the **Browser Window**:
 > * **Red Hat Advanced Cluster Management (RHACM):** The triage policies you saw are declarative ConfigMaps. An autonomy engineer at headquarters can tune novelty thresholds in Git, and RHACM automatically enforces the policy across 50 mining pits worldwide.*
 > * **Vendor-Neutral Storage:** Our storage claims are decoupled. Here in AWS ROSA, we're backed by AWS EFS CSI (`efs-sc`). On-prem at the mine site, the exact same containers bind to NetApp ONTAP NVMe arrays with Astra Trident CSI.*
 >
-> *In summary: we've eliminated 85% of edge data waste, cut cloud costs, and preserved 100% of our safety-critical intelligence. Thank you, and I'd be happy to take questions."*
+> *In summary: we've eliminated 98% of edge data waste, cut cloud costs, and preserved 100% of our safety-critical intelligence. Thank you, and I'd be happy to take questions."*
 
 ---
 

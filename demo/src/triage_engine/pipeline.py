@@ -148,7 +148,7 @@ def extract_video_clip(
     Modes:
       - stream_copy=True: Stream copy (-c copy) on keyframe GOP boundaries with near-zero CPU overhead.
         Ideal for multi-camera 4K production scale on edge CPU without dedicated GPU acceleration.
-      - stream_copy=False: Decimates to target_fps (Specification 02) via universal mpeg4 encoder.
+      - stream_copy=False: Decimates to target_fps (Specification 02) via browser-native H.264 (libx264 +faststart, mpeg4 fallback).
         Ideal for standard CPU edge clusters where frame-rate reduction is mandatory.
     Returns the size of the extracted clip in bytes, or None on failure.
     """
@@ -266,9 +266,10 @@ class TriagePipeline:
         self.total_curated_bytes = 0
         self.curated_tier_bytes: Dict[str, int] = defaultdict(int)
         
-        # Initialize USearch CPU-accelerated index (128-D Cosine) with persistence
+        # Initialize USearch CPU-accelerated index (128-D Cosine) with ODD baseline manifold
         self.vector_dim = policy.filter_3_novelty.vector_dim
         self.local_index_path = Path(policy.filter_3_novelty.local_index_path)
+        baseline_centroid = [1.0] * self.vector_dim
         if USEARCH_AVAILABLE:
             self.usearch_index = Index(ndim=self.vector_dim, metric="cos")
             try:
@@ -281,16 +282,16 @@ class TriagePipeline:
                     )
                 else:
                     logger.info("Initializing fresh USearch SIMD-accelerated HNSW index on CPU (128-D, metric=cos)...")
-                    self.usearch_index.add(0, to_vector([0.0] * self.vector_dim))
+                    self.usearch_index.add(0, to_vector(baseline_centroid))
                     self.usearch_index.save(str(self.local_index_path))
             except Exception as err:
                 logger.warning(f"Could not load/save persistent USearch index at {self.local_index_path}: {err}")
                 if len(self.usearch_index) == 0:
-                    self.usearch_index.add(0, to_vector([0.0] * self.vector_dim))
+                    self.usearch_index.add(0, to_vector(baseline_centroid))
         else:
             logger.warning("USearch library not available; using native Python vector search fallback.")
             self.usearch_index = None
-            self.fallback_vectors: Dict[int, List[float]] = {0: [0.0] * self.vector_dim}
+            self.fallback_vectors: Dict[int, List[float]] = {0: baseline_centroid}
 
         # Spatial-temporal ring buffer for Filter 6: list of (timestamp, (lat, lon), embedding_128d)
         self.coreset_buffer: List[Tuple[float, Tuple[float, float], List[float]]] = []
@@ -508,12 +509,16 @@ class TriagePipeline:
                             return None
 
             self.coreset_buffer.append((ts, coords, embedding))
-            if USEARCH_AVAILABLE and self.usearch_index is not None and embedding:
-                self.usearch_index.add(len(self.coreset_buffer), to_vector(embedding))
-                try:
-                    self.usearch_index.save(str(self.local_index_path))
-                except Exception as err:
-                    logger.debug(f"Failed to persist USearch index update: {err}")
+            if embedding:
+                if USEARCH_AVAILABLE and self.usearch_index is not None:
+                    vec_key = len(self.usearch_index)
+                    self.usearch_index.add(vec_key, to_vector(embedding))
+                    try:
+                        self.usearch_index.save(str(self.local_index_path))
+                    except Exception as err:
+                        logger.debug(f"Failed to persist USearch index update: {err}")
+                elif hasattr(self, "fallback_vectors"):
+                    self.fallback_vectors[len(self.fallback_vectors)] = embedding
 
         # ---------------------------------------------------------
         # Quota Governance & Preemption Order (Specification 01 §6.4)

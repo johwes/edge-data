@@ -20,6 +20,8 @@ The canonical system architecture is modularized into focused subsystem specific
 ## 2. Practical Implementation Blueprint (PoC / Demo)
 
 * **[Edge Data Triage & Deduplication Blueprint](demo/BLUEPRINT.md)**: A concrete, actionable implementation blueprint bridging Specifications 01 and 02 into a runnable "Hello World" application designed for:
-  * **Red Hat OpenShift (SNO / MicroShift)** at the edge.
-  * **NetApp Storage (ONTAP / Astra Trident CSI)** for high-throughput raw ingest, local snapshots, and tiering.
+  * **Red Hat OpenShift (SNO / MicroShift / ROSA / ARO)** at the edge or in the cloud.
+  * **NetApp Storage (ONTAP / Astra Trident CSI)** or cloud-native RWX storage for high-throughput raw ingest, local snapshots, and tiering.
   * **Red Hat Advanced Cluster Management (RHACM)** for centralized GitOps policy distribution, daily quota governance, and multi-cluster deployment.
+* **[Quick-Start Deployment Guide (`demo/README.md`)](demo/README.md)**: Step-by-step instructions to build, deploy, and run the 100-event telemetry simulator, FFmpeg video extraction, and Prometheus metrics on OpenShift.
+* **[Live Presenter & Storytelling Guide (`demo/DEMO_GUIDE.md`)](demo/DEMO_GUIDE.md)**: 5-minute narrative script, dual-stream colored log runner (`stream_demo.py`), environment reset script (`prep_demo.sh`), and live Web Dashboard walkthrough.

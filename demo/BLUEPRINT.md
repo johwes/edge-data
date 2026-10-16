@@ -144,7 +144,7 @@ If any filter flags a candidate snippet, it enters fleet deduplication:
   * **Production Video Scaling Paths (CPU vs. GPU vs. Stream Copy):**
     * *Zero-CPU Stream Copy (`-c copy`):* When vehicle cameras record with fixed 1-second GOPs (Group of Pictures), the worker pipeline uses stream-copy (`-c copy`) on keyframe boundaries. This achieves near-zero CPU overhead even across multiple concurrent 4K (8MP @ 30 FPS) streams. Toggleable via `VIDEO_STREAM_COPY=true`.
     * *Hardware GPU Decimation Offload:* If frame-rate decimation (30 $\rightarrow$ 10 FPS) is mandatory for 4K video to meet WAN/satellite quotas, offload decoding, filtering, and re-encoding to an edge GPU (e.g., NVIDIA L4 / T4) via the **OpenShift NVIDIA GPU Operator** using hardware-accelerated filters (`-c:v h264_cuvid -r 10 -c:v h264_nvenc`).
-    * *Lightweight CPU Software Transcode:* In standard compact 3-node CPU edge clusters (as featured in this demo), the pipeline utilizes universal `mpeg4`/`yuv420p` encoding, completing decimation in ~30ms without proprietary codec licensing.
+    * *Lightweight CPU Software Transcode:* In standard compact 3-node CPU edge clusters (as featured in this demo), the pipeline utilizes browser-native `libx264` (`avc1`/`yuv420p` with `-preset ultrafast -tune zerolatency -movflags +faststart`, and `mpeg4` fallback), completing decimation in ~140ms for instant HTML5 browser playback.
   * **Ingest Buffer Eviction:** The raw un-decimated rolling video buffer (~1.25 MB demo / ~250 MB prod) is automatically purged from `/mnt/raw_ingest`.
 * **Canonical Sensor Stream IDs & Frustum Pruning:**
   * `/sensors/cam_front_center_8mp`: **KEEP & DECIMATE** (30 $\rightarrow$ 10 FPS, ~35% bytes)
@@ -179,11 +179,11 @@ Multi-gigabyte vehicle recordings landing across 10G optical wireless berths or 
   * **Input Volume (100 vehicle events):** 100 raw 45s events @ 1.6 to 2.7 GB unpruned = **~160 to 270 GB raw ingest**.
   * **Stage 1 & 2 Filtering:** 91 nominal events discarded. 9 candidate anomaly events flagged. Filter 6 deduplicates cross-truck encounters.
   * **Stage 3 Pruning:** Preserved candidates are decimated from ~2.0 GB down to **~240 to 810 MB each** (nominal average ~350 MB; up to ~800 MB if reverse-gear safety exception preserves rear sensors).
-  * **Output Volume:** Total curated Golden Data Set volume = **~1.4 to 2.4 GB**, achieving a **~98.6% to 99.1% data volume reduction**.
+  * **Output Volume:** Total curated Golden Data Set volume = **~1.4 to 2.4 GB**, achieving a **~98.0% to 99.1% data volume reduction**.
 * **Demo Benchmark Run (Calibrated for Fast Cluster Testing):**
-  * **Input Volume:** 100 synthetic MCAP packages @ 1,024 KB each = **~102.4 MB raw ingest**.
-  * **Filtering & Decimation:** 91 nominal events discarded; candidate streams pruned to ~350 KB each (and ~800 KB for reversing hopper maneuvers).
-  * **Output Volume:** Total curated volume = **~1.4 MB**, demonstrating the exact same **~98.6% bandwidth reduction** live on Prometheus gauges within seconds.
+  * **Input Volume:** 100 synthetic MCAP packages @ ~1,033 KB each + 2 raw 30s camera streams = **~105.9 MB raw ingest**.
+  * **Filtering & Decimation:** 91 nominal events discarded; 1 duplicate suppressed by Filter 6; 8 unique candidate MCAPs pruned to ~169 KB forward / ~566 KB reversing + 2 extracted 10s H.264 video clips (~180 KB each).
+  * **Output Volume:** Total curated volume = **~2.1 MB**, demonstrating **~98.0% bandwidth reduction** live on Prometheus gauges and the Web Dashboard within seconds.
 
 ---
 
@@ -194,9 +194,9 @@ Multi-gigabyte vehicle recordings landing across 10G optical wireless berths or 
 | **Robotics Log Serialization** | **Foxglove MCAP** (`mcap`) | Apache-2.0 | Append-only container format for multi-modal sensor streams. Enables seeking and channel extraction without loading entire files into memory. |
 | **Embedded Vector Search** | **USearch (Unum)** (`usearch` Python / C++11) | Apache-2.0 | Fast, lightweight HNSW vector index. Runs SIMD-optimized cosine distance queries on 128-D embeddings directly on edge CPU/NPU. |
 | **Spatial Indexing** | **Uber H3** (`h3`) / **Geohash2** | Apache-2.0 / MIT | Hexagonal spatial indexing for quantizing truck GPS coordinates into ~100m buckets for Filter 6 coreset matching. |
-| **Video Extraction & Decimation** | **FFmpeg** / `imageio-ffmpeg` | LGPL-2.1+ | In-container temporal extraction of incident video windows ($T-5\text{s}..T+5\text{s}$) and frame-rate decimation (30 $\rightarrow$ 10 FPS) to standalone `.mp4`. |
-| **Microservice Runtime** | **Python 3.11+** / **FastAPI** | PSF / MIT | Event-driven triage worker and mock telemetry generator. |
-| **Container Base Image** | **Red Hat Universal Base Image 9 (UBI 9 Minimal)** | Red Hat UBI EULA | Hardened enterprise container base image optimized for OpenShift workloads. |
+| **Video Extraction & Decimation** | **FFmpeg** / `imageio-ffmpeg` | LGPL-2.1+ | In-container temporal extraction of incident video windows ($T-5\text{s}..T+5\text{s}$) and frame-rate decimation (30 $\rightarrow$ 10 FPS) to H.264 `.mp4`. |
+| **Microservice Runtime** | **Python 3.11+** / **ThreadingHTTPServer** + **Pydantic v2** | PSF / MIT | Event-driven triage worker, unified Web/Prometheus HTTP server (`/`, `/api/status`, `/videos/*`, `/metrics`), and mock telemetry generator. |
+| **Container Base Image** | **Red Hat Universal Base Image 9 (UBI 9 Python 3.11)** | Red Hat UBI EULA | Hardened enterprise container base image optimized for OpenShift workloads. |
 | **Storage Orchestration** | **NetApp Astra Trident CSI** | Apache-2.0 | Open-source Kubernetes CSI driver dynamically provisioning NetApp ONTAP PersistentVolumes and VolumeSnapshots. |
 | **Storage Backend** | **NetApp ONTAP** | Commercial | Enterprise storage operating system providing NVMe, NFS, deduplication, and SnapMirror replication. |
 | **Cluster Management** | **Red Hat ACM (RHACM)** | Commercial (Upstream: Open Cluster Management, Apache-2.0) | Multi-cluster GitOps engine deploying triage workloads and synchronizing configuration policies across edge clusters. |
@@ -207,15 +207,12 @@ Multi-gigabyte vehicle recordings landing across 10G optical wireless berths or 
 
 ### 5.1 Simulated Raw Ingest Directory Structure (NetApp Raw PVC)
 ```
-/mnt/raw_ingest/
-├── HAUL-TRUCK-002/
-│   └── 20261014T080000Z/
-│       ├── sensor_stream.mcap        # 45-second multi-channel raw recording (~1.6–2.7 GB)
-│       └── telemetry.json             # CAN bus, IMU, GPS, and inference outputs
-├── HAUL-TRUCK-007/
-│   └── 20261014T081500Z/
-│       ├── sensor_stream.mcap
-│       └── telemetry.json
+/mnt/raw_ingest/incoming/
+├── EVT_F1_AEB_DOWNHILL_001.mcap                         # 9-channel raw sensor + telemetry container (~1.03 MB)
+├── EVT_F1_AEB_DOWNHILL_001_raw_camera_30s_30fps.mp4     # Rolling 30s 30 FPS raw camera buffer (~1.25 MB)
+├── EVT_REVERSING_HOPPER_MANEUVER_006.mcap
+├── EVT_REVERSING_HOPPER_MANEUVER_006_raw_rear_camera_30s_30fps.mp4
+└── EVT_NOMINAL_HAUL_010.mcap ... EVT_NOMINAL_HAUL_100.mcap
 ```
 
 ### 5.2 Telemetry JSON Contract (`telemetry.json`)
@@ -244,7 +241,7 @@ Multi-gigabyte vehicle recordings landing across 10G optical wireless berths or 
     "minimum_detection_confidence": 0.52,
     "bounding_box_jitter_variance": 0.042,
     "sensor_disagreement": true,
-    "embedding_128d": [0.0381, -0.1422, 0.8912, 0.0054, -0.0612]
+    "embedding_128d": [0.9812, 1.0321, 0.9654, 1.0112, 0.9941]
   }
 }
 ```
@@ -252,9 +249,10 @@ Multi-gigabyte vehicle recordings landing across 10G optical wireless berths or 
 ### 5.3 Curated GDS Output Directory Structure (NetApp Curated PVC)
 ```
 /mnt/gds_curated/
-└── SNIP-20261014-TRK042-00941/
-    ├── gds_metadata_v2.json           # Standardized catalog entry (<5 KB)
-    └── pruned_payload.mcap            # Pruned 45s event snippet (~240–810 MB)
+├── gds_curated_EVT_F1_AEB_DOWNHILL_001.mcap                  # Pruned forward sensor + metadata MCAP (~169 KB)
+├── gds_curated_EVT_F1_AEB_DOWNHILL_001_clip_10s_10fps.mp4    # Extracted 10s 10 FPS H.264 clip (~180 KB)
+├── gds_curated_EVT_REVERSING_HOPPER_MANEUVER_006.mcap        # Promoted rear-vision safety MCAP (~566 KB)
+└── gds_curated_EVT_REVERSING_HOPPER_MANEUVER_006_clip_10s_10fps.mp4
 ```
 
 ---
@@ -265,26 +263,33 @@ The complete deployable Kubernetes and OpenShift manifests are located in [`demo
 
 ```
 demo/
+├── DEMO_GUIDE.md                 # 5-minute narrative script & presenter runbook
+├── README.md                     # Quick-start deployment & verification instructions
+├── scripts/                      # Presenter automation & live terminal monitors
+│   ├── prep_demo.sh              # Resets storage pools, restarts worker metrics, prints dashboard URL
+│   └── stream_demo.py            # Dual-stream color-coded log tailer (Simulator + Triage Worker)
 ├── src/                          # Enterprise modular Python microservice source
-│   ├── Containerfile             # Hardened Red Hat UBI 9 image definition
-│   ├── requirements.txt          # mcap, usearch, pyyaml, pydantic, prometheus-client
+│   ├── Containerfile             # Hardened Red Hat UBI 9 image definition (non-root 1001:0)
+│   ├── requirements.txt          # mcap, usearch, numpy, pyyaml, pydantic, prometheus-client, h3, imageio-ffmpeg
 │   ├── triage_engine/            # Core triage engine package
-│   │   ├── config.py             # Pydantic schema validation & inotify policy reloader
-│   │   ├── metrics.py            # Prometheus metrics (bytes, counters, reduction ratio)
-│   │   ├── pipeline.py           # MCAP processor & USearch CPU SIMD vector index
-│   │   └── main.py               # Main service daemon & HTTP metrics server
+│   │   ├── config.py             # Pydantic schema validation & policy hot-reloader
+│   │   ├── dashboard.html        # Dark-mode live telemetry UI & HTML5 incident video player
+│   │   ├── metrics.py            # Unified HTTP/1.1 server (/, /api/status, /videos/*, /metrics)
+│   │   ├── pipeline.py           # 6-filter MCAP processor, FFmpeg slicer & USearch SIMD vector index
+│   │   └── main.py               # Main service daemon & atomic file-transfer handshake watcher
 │   └── simulator/                # Benchmark fleet telemetry generator
-│       └── generator.py          # Emits genuine multi-channel MCAP containers
+│       └── generator.py          # Emits 100 multi-channel MCAP containers & rolling 30s camera streams
 │
 └── k8s/                          # OpenShift & NetApp manifests
-    ├── 00_namespace.yaml         # Namespace, ServiceAccount, non-root OpenShift SCC compliance
-    ├── 01_storage_classes.yaml   # Trident StorageClasses, TridentBackendConfig, and Secret template
-    ├── 02_persistent_volumes.yaml# Raw Ingest (500 GiB demo-scale) and Curated GDS (100 GiB) PVCs
+    ├── 00_namespace.yaml         # Optional dedicated Namespace with restricted Pod Security labels
+    ├── 00_rbac.yaml              # ServiceAccount, Role, and RoleBinding
+    ├── 01_storage_classes.yaml   # Optional Trident StorageClasses, TridentBackendConfig, and Secret
+    ├── 02_persistent_volumes.yaml# Portable RWX PVCs (10Gi raw-ingest-pvc, 5Gi gds-curated-pvc)
     ├── 03_triage_configmap.yaml  # Triage quotas, thresholds, campaigns, and storage eviction policy
-    ├── 04_triage_deployment.yaml # Containerized triage worker pod with probes & Prometheus port 8080
+    ├── 04_triage_deployment.yaml # Containerized triage worker pod with probes & port 8080
     ├── 05_simulator_job.yaml     # Benchmark fleet generator Job producing 100 MCAP test packages
-    ├── 06_monitoring.yaml        # Service and OpenShift ServiceMonitor for Web Console dashboards
-    ├── 07_buildconfig.yaml       # OpenShift ImageStream & BuildConfig for in-cluster builds
+    ├── 06_monitoring.yaml        # Service, ServiceMonitor, and TLS Edge Route (edge-triage-dashboard)
+    ├── 07_buildconfig.yaml       # OpenShift ImageStream (local lookup) & Binary BuildConfig
     └── 08_rhacm_governance.yaml  # RHACM Placement, ConfigurationPolicy, and PlacementBinding
 ```
 

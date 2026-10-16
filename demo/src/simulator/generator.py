@@ -113,7 +113,7 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
             "shannon_entropy": 0.78,
             "temporal_variance_5frame": 0.045
         },
-        "embedding": [random.uniform(-0.1, 0.1) for _ in range(128)],
+        "embedding": [1.0 + random.uniform(-0.05, 0.05) for _ in range(128)],
         "gps": [-22.3300, 119.8100],
         "is_shift_anchor": False,
         "raw_video_filename": vid_f1,
@@ -141,13 +141,13 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
             "shannon_entropy": 0.82,
             "temporal_variance_5frame": 0.065
         },
-        "embedding": [random.uniform(-0.1, 0.1) for _ in range(128)],
+        "embedding": [1.0 + random.uniform(-0.05, 0.05) for _ in range(128)],
         "gps": [-22.3310, 119.8110],
         "is_shift_anchor": False
     })
 
-    # 3. Filter 3 Trigger: Novel road condition / spillage (USearch novelty > 0.72)
-    novel_vector = [0.6] * 128
+    # 3. Filter 3 Trigger: Novel road condition / spillage (USearch cosine distance ~0.79 > 0.72)
+    novel_vector = [1.0 if i % 2 == 0 else -0.65 for i in range(128)]
     events.append({
         "event_id": "EVT_F3_NOVEL_HAUL_ROAD_003",
         "timestamp_epoch": now - 400,
@@ -174,7 +174,7 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
     })
 
     # 4 & 5. Filter 6 Pair: Two trucks encountering the same obstacle 3 minutes and 15m apart
-    common_vector = [0.35] * 128
+    common_vector = [1.0 + (0.05 if i % 3 == 0 else -0.02) for i in range(128)]
     events.append({
         "event_id": "EVT_F6_INTERSECTION_DUPLICATE_004A",
         "timestamp_epoch": now - 300,
@@ -247,7 +247,7 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
             "shannon_entropy": 0.50,
             "temporal_variance_5frame": 0.020
         },
-        "embedding": [random.uniform(-0.1, 0.1) for _ in range(128)],
+        "embedding": [1.0 + random.uniform(-0.05, 0.05) for _ in range(128)],
         "gps": [-22.3340, 119.8140],
         "is_shift_anchor": False,
         "raw_video_filename": vid_rev,
@@ -275,7 +275,7 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
             "shannon_entropy": 0.15,
             "temporal_variance_5frame": 0.005
         },
-        "embedding": [random.uniform(-0.05, 0.05) for _ in range(128)],
+        "embedding": [1.0 + random.uniform(-0.05, 0.05) for _ in range(128)],
         "gps": [-22.3180, 119.8250], # Inside the polygon
         "is_shift_anchor": False
     })
@@ -301,7 +301,7 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
             "shannon_entropy": 0.20,
             "temporal_variance_5frame": 0.010
         },
-        "embedding": [random.uniform(-0.05, 0.05) for _ in range(128)],
+        "embedding": [1.0 + random.uniform(-0.05, 0.05) for _ in range(128)],
         "gps": [-22.3350, 119.8150],
         "is_shift_anchor": False
     })
@@ -327,7 +327,7 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
             "shannon_entropy": 0.05,
             "temporal_variance_5frame": 0.002
         },
-        "embedding": [random.uniform(-0.02, 0.02) for _ in range(128)],
+        "embedding": [1.0 + random.uniform(-0.02, 0.02) for _ in range(128)],
         "gps": [-22.3360, 119.8160],
         "is_shift_anchor": True
     })
@@ -354,7 +354,7 @@ def generate_benchmark_events(output_dir: Path, total_events: int = 100, payload
                 "shannon_entropy": random.uniform(0.05, 0.40),
                 "temporal_variance_5frame": random.uniform(0.001, 0.020)
             },
-            "embedding": [random.uniform(-0.05, 0.05) for _ in range(128)],
+            "embedding": [1.0 + random.uniform(-0.05, 0.05) for _ in range(128)],
             "gps": [-22.3400 + random.uniform(0, 0.01), 119.8000 + random.uniform(0, 0.01)],
             "is_shift_anchor": False
         })

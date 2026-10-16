@@ -68,6 +68,13 @@ PROCESSING_LATENCY = Histogram(
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
+    def handle_error(self, request, client_address):
+        import sys
+        _, exc, _ = sys.exc_info()
+        if isinstance(exc, (ConnectionResetError, BrokenPipeError, TimeoutError, OSError)):
+            return
+        super().handle_error(request, client_address)
+
 class UnifiedMetricsHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     curated_dir: Path = Path("/mnt/gds_curated")
@@ -76,6 +83,17 @@ class UnifiedMetricsHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         # Suppress verbose access logging for polling endpoints
         pass
+
+    def end_headers(self):
+        self.send_header("Connection", "close")
+        self.close_connection = True
+        super().end_headers()
+
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except (ConnectionResetError, BrokenPipeError, TimeoutError, OSError):
+            self.close_connection = True
 
     def do_HEAD(self):
         url_path = self.path.split("?")[0]
@@ -108,7 +126,10 @@ class UnifiedMetricsHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", CONTENT_TYPE_LATEST)
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
-            self.wfile.write(data)
+            try:
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
         elif url_path == "/api/status":
             self.handle_api_status()
@@ -157,7 +178,7 @@ class UnifiedMetricsHandler(BaseHTTPRequestHandler):
             curated_bytes = sum(f["size"] for f in curated_files) + sum(v["size"] for v in videos)
 
         events_ingested = 0
-        events_curated = len(curated_files)
+        events_curated = 0
         events_discarded = 0
         dedup_suppressions = 0
 
@@ -169,6 +190,9 @@ class UnifiedMetricsHandler(BaseHTTPRequestHandler):
                         events_ingested = int(sample.value)
                     elif sample.name == "edge_triage_dedup_suppressions_total":
                         dedup_suppressions = int(sample.value)
+            for sample in EVENTS_CURATED.collect()[0].samples:
+                if sample.name == "edge_triage_events_curated_total":
+                    events_curated += int(sample.value)
             for sample in EVENTS_DISCARDED.collect()[0].samples:
                 if sample.name == "edge_triage_events_discarded_total":
                     events_discarded += int(sample.value)
@@ -177,6 +201,9 @@ class UnifiedMetricsHandler(BaseHTTPRequestHandler):
                     reduction_pct = sample.value
         except Exception:
             pass
+
+        if events_curated == 0 and curated_files:
+            events_curated = len(curated_files)
 
         payload = {
             "cell_id": getattr(self.pipeline_ref, "cell_id", "pilbara-cell-04") if self.pipeline_ref else "pilbara-cell-04",
