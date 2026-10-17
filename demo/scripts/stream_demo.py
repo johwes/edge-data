@@ -53,7 +53,11 @@ def get_oc_binary() -> str:
 
 def colorize_worker_line(line: str) -> str:
     """Applies contextual color highlights to triage worker log lines."""
-    if "TIER_1_FORENSIC" in line or "AEB" in line or "ROLLOVER" in line:
+    if "[VLM]" in line:
+        return f"{MAGENTA}{BOLD}[OPENSHIFT AI VLM]{RESET} {CYAN}{BOLD}{line}{RESET}"
+    elif "Extracted" in line and "clip" in line:
+        return f"{GREEN}{BOLD}[VIDEO EXTRACTION]{RESET} {GREEN}{line}{RESET}"
+    elif "TIER_1_FORENSIC" in line or "AEB" in line or "ROLLOVER" in line:
         return f"{RED}{BOLD}[TIER-1 FORENSIC]{RESET} {RED}{line}{RESET}"
     elif "TIER_2_MODEL_UNCERTAINTY" in line or "DUST" in line:
         return f"{YELLOW}[TIER-2 UNCERTAINTY]{RESET} {YELLOW}{line}{RESET}"
@@ -61,8 +65,6 @@ def colorize_worker_line(line: str) -> str:
         return f"{MAGENTA}[TIER-3 NOVELTY]{RESET} {MAGENTA}{line}{RESET}"
     elif "Suppressed by Filter 6" in line or "DEDUP" in line:
         return f"{GREEN}{BOLD}[FILTER-6 DEDUP]{RESET} {GREEN}{line}{RESET}"
-    elif "Extracted" in line and "clip" in line:
-        return f"{GREEN}{BOLD}[VIDEO EXTRACTION]{RESET} {GREEN}{line}{RESET}"
     elif "Discarded by Filters" in line or "nominal_discard" in line:
         return f"{DIM}[NOMINAL DISCARD] {line}{RESET}"
     elif "[Done] Curated" in line:
@@ -132,6 +134,7 @@ def main():
     print(f"  {MAGENTA}[TIER-3 NOVELTY]{RESET} USearch SIMD 128-D Cosine Anomaly Detections")
     print(f"  {GREEN}[FILTER-6 DEDUP]{RESET} Spatiotemporal Redundant Encounter Suppressions")
     print(f"  {GREEN}{BOLD}[VIDEO EXTRACTION]{RESET} In-Container FFmpeg 10s Temporal Slices (30->10 FPS)")
+    print(f"  {MAGENTA}{BOLD}[OPENSHIFT AI VLM]{RESET} Multimodal Vision Root-Cause Analysis (Qwen2.5-VL-7B)")
     print(f"  {DIM}[NOMINAL DISCARD]{RESET} Routine Empty Haul Cycles Dropped at Edge")
     print("=" * 80)
     print(f"{YELLOW}Press Ctrl+C at any time to stop streaming.{RESET}\n")

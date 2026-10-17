@@ -153,10 +153,18 @@ class UnifiedMetricsHandler(BaseHTTPRequestHandler):
         try:
             if self.curated_dir.exists():
                 for p in sorted(self.curated_dir.glob("*.mp4"), key=lambda x: x.stat().st_mtime, reverse=True):
+                    vlm_data = None
+                    vlm_file = p.with_suffix(".vlm.json")
+                    if vlm_file.exists():
+                        try:
+                            vlm_data = json.loads(vlm_file.read_text(encoding="utf-8"))
+                        except Exception:
+                            vlm_data = None
                     videos.append({
                         "name": p.name,
                         "size": p.stat().st_size,
-                        "url": f"/videos/{p.name}"
+                        "url": f"/videos/{p.name}",
+                        "vlm": vlm_data,
                     })
                 for p in sorted(self.curated_dir.glob("*.mcap"), key=lambda x: x.stat().st_mtime, reverse=True):
                     curated_files.append({
