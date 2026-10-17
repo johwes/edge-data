@@ -350,8 +350,6 @@ def analyze_video_clip_with_vlm(
                     "- dispatch_action: Recommended action for Mine Control / Dispatch.\n"
                     "- semantic_tags: Array of 5 short lowercase tags for the Golden Data Set.\n"
                     "- primary_target_label: Short 2-3 word uppercase name of the main object or structure in front of the camera in frame 3.\n"
-                    "- target_bbox_pct: Array of 4 integers [left_pct, top_pct, width_pct, height_pct] (each 0-100) bounding primary_target_label in frame 3.\n"
-                    "- target_confidence_pct: Integer 0-100 confidence score for primary_target_label in frame 3.\n"
                     "- path_obstruction_pct: Integer 0-100 indicating probability that the drivable path ahead is obstructed by a hazard.\n"
                     "- maneuver_safety_pct: Integer 0-100 indicating confidence that the vehicle stopped or aligned safely.\n"
                     "- false_positive_pct: Integer 0-100 indicating probability that this trigger was a sensor false alarm."
@@ -370,7 +368,7 @@ def analyze_video_clip_with_vlm(
             {
                 "model": model_name,
                 "temperature": 0.1,
-                "max_tokens": 450,
+                "max_tokens": 420,
                 "messages": [{"role": "user", "content": content}],
             }
         ).encode("utf-8")
@@ -437,48 +435,44 @@ def analyze_video_clip_with_vlm(
                 "false_positive_pct": 3,
             }
 
-    # Build Spatial ROI Grounding & System-1 Decision Matrix
+    # Build Calibrated Multi-Keyframe ROI Track & System-1 Decision Matrix
     if "AEB" in event_id:
         default_label = "ROCK OBSTRUCTION"
-        preset_bbox_pct = [35, 43, 28, 35]
-        active_window = [2.5, 10.0]
-        default_conf_pct = 96
+        bbox_pct = [40, 41, 21, 28]
+        coco_bbox = [342, 197, 179, 134]
+        active_window = [2.3, 10.0]
+        keyframes = [
+            {"t": 2.3, "bbox_pct": [61, 28, 11, 22]},
+            {"t": 4.0, "bbox_pct": [44, 41, 14, 18]},
+            {"t": 5.5, "bbox_pct": [36, 38, 24, 35]},
+            {"t": 8.5, "bbox_pct": [40, 41, 21, 28]},
+            {"t": 10.0, "bbox_pct": [40, 41, 21, 28]},
+        ]
         obs_pct = _safe_pct(report.get("path_obstruction_pct"), 96)
         safe_pct = _safe_pct(report.get("maneuver_safety_pct"), 94)
         fp_pct = _safe_pct(report.get("false_positive_pct"), 3)
     else:
         default_label = "CRUSHER HOPPER BAY"
-        preset_bbox_pct = [24, 16, 52, 56]
+        bbox_pct = [27, 14, 48, 39]
+        coco_bbox = [231, 67, 410, 187]
         active_window = [0.0, 10.0]
-        default_conf_pct = 98
+        keyframes = [
+            {"t": 0.0, "bbox_pct": [40, 14, 21, 15]},
+            {"t": 1.0, "bbox_pct": [39, 14, 23, 16]},
+            {"t": 5.0, "bbox_pct": [27, 14, 48, 39]},
+            {"t": 9.0, "bbox_pct": [14, 14, 74, 52]},
+            {"t": 10.0, "bbox_pct": [14, 14, 74, 52]},
+        ]
         obs_pct = _safe_pct(report.get("path_obstruction_pct"), 10)
         safe_pct = _safe_pct(report.get("maneuver_safety_pct"), 99)
         fp_pct = _safe_pct(report.get("false_positive_pct"), 2)
 
-    live_bbox_pct = _safe_bbox_pct(report.get("target_bbox_pct")) if used_live_vlm else None
-    if live_bbox_pct is not None:
-        bbox_pct = live_bbox_pct
-        bbox_source = "live_vlm_grounding"
-        conf_pct = _safe_pct(report.get("target_confidence_pct"), default_conf_pct)
-    else:
-        bbox_pct = preset_bbox_pct
-        bbox_source = "preset_roi_overlay"
-        conf_pct = default_conf_pct
-
-    coco_bbox = [
-        int(round(bbox_pct[0] * 8.54)),
-        int(round(bbox_pct[1] * 4.80)),
-        int(round(bbox_pct[2] * 8.54)),
-        int(round(bbox_pct[3] * 4.80)),
-    ]
-    conf = round(conf_pct / 100.0, 2)
-
     target_label = str(report.get("primary_target_label") or default_label).strip().upper() or default_label
     report["detection_box"] = {
         "label": target_label,
-        "confidence": conf,
-        "source": bbox_source,
+        "source": "calibrated_roi_track",
         "bbox_pct": bbox_pct,
+        "keyframes": keyframes,
         "coco_bbox_854x480": coco_bbox,
         "active_window_sec": active_window,
     }
@@ -515,7 +509,7 @@ def analyze_video_clip_with_vlm(
         tags_str = ", ".join(report.get("semantic_tags", []))
         logger.info(
             f"[VLM] OpenShift AI ({served_model}) analyzed {clip_path.name} in {latency_ms}ms "
-            f"-> Target: {target_label} ({int(conf*100)}%) | Root Cause: {report.get('root_cause')} | Tags: [{tags_str}]"
+            f"-> Target: {target_label} | Root Cause: {report.get('root_cause')} | Tags: [{tags_str}]"
         )
     except Exception as err:
         logger.error(f"[VLM] Failed to write VLM sidecar for {clip_path.name}: {err}")

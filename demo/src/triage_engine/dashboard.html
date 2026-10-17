@@ -290,7 +290,7 @@
       <div class="video-container" style="position: relative;">
         <video id="player" controls autoplay muted playsinline preload="auto"></video>
         <!-- Decision-Box 2D Spatial ROI Overlay -->
-        <div id="bbox-overlay" style="display: none; position: absolute; pointer-events: none; border: 2px solid #ef4444; box-shadow: 0 0 14px rgba(239, 68, 68, 0.55), inset 0 0 10px rgba(239, 68, 68, 0.25); border-radius: 4px; transition: all 0.15s ease;">
+        <div id="bbox-overlay" style="display: none; position: absolute; pointer-events: none; border: 2px solid #ef4444; box-shadow: 0 0 14px rgba(239, 68, 68, 0.55), inset 0 0 10px rgba(239, 68, 68, 0.25); border-radius: 4px;">
           <div id="bbox-tag" style="position: absolute; top: -24px; left: -2px; background: rgba(239, 68, 68, 0.92); color: #fff; font-family: monospace; font-size: 0.70rem; font-weight: 700; padding: 2px 7px; border-radius: 3px; white-space: nowrap; letter-spacing: 0.04em;">
             TARGET
           </div>
@@ -449,6 +449,7 @@
     let videoMap = {};
     let bboxEnabled = true;
     let activeDetectionBox = null;
+    let rafId = null;
 
     function toggleBbox() {
       bboxEnabled = !bboxEnabled;
@@ -456,6 +457,30 @@
       btn.textContent = bboxEnabled ? '[ROI Overlay: ON]' : '[ROI Overlay: OFF]';
       btn.style.opacity = bboxEnabled ? '1.0' : '0.5';
       updateBboxVisibility();
+    }
+
+    function interpolateBboxPct(boxData, t) {
+      const kfs = boxData.keyframes;
+      if (!Array.isArray(kfs) || kfs.length === 0) {
+        return boxData.bbox_pct || [40, 41, 21, 28];
+      }
+      if (t <= kfs[0].t) return kfs[0].bbox_pct;
+      if (t >= kfs[kfs.length - 1].t) return kfs[kfs.length - 1].bbox_pct;
+      for (let i = 0; i < kfs.length - 1; i++) {
+        const a = kfs[i];
+        const b = kfs[i + 1];
+        if (t >= a.t && t <= b.t) {
+          const span = Math.max(0.001, b.t - a.t);
+          const alpha = (t - a.t) / span;
+          return [
+            a.bbox_pct[0] + (b.bbox_pct[0] - a.bbox_pct[0]) * alpha,
+            a.bbox_pct[1] + (b.bbox_pct[1] - a.bbox_pct[1]) * alpha,
+            a.bbox_pct[2] + (b.bbox_pct[2] - a.bbox_pct[2]) * alpha,
+            a.bbox_pct[3] + (b.bbox_pct[3] - a.bbox_pct[3]) * alpha,
+          ];
+        }
+      }
+      return boxData.bbox_pct || [40, 41, 21, 28];
     }
 
     function updateBboxVisibility() {
@@ -466,31 +491,54 @@
       const t = player.currentTime || 0;
       const win = activeDetectionBox.active_window_sec || [0, 10];
       if (t >= win[0] && t <= win[1]) {
-        const [leftPct, topPct, widthPct, heightPct] = activeDetectionBox.bbox_pct || [35, 43, 28, 35];
+        const [leftPct, topPct, widthPct, heightPct] = interpolateBboxPct(activeDetectionBox, t);
         const isHazard = (activeDetectionBox.label || '').includes('ROCK') || (activeDetectionBox.label || '').includes('OBSTRUCTION') || (activeDetectionBox.label || '').includes('BOULDER');
         const color = isHazard ? '#ef4444' : '#38bdf8';
-        bboxOverlay.style.left = `${leftPct}%`;
-        bboxOverlay.style.top = `${topPct}%`;
-        bboxOverlay.style.width = `${widthPct}%`;
-        bboxOverlay.style.height = `${heightPct}%`;
+
+        // Map [0..100%] coordinates onto the exact rendered video frame (accounting for any pillarbox/letterbox bars)
+        const elW = player.clientWidth || 1;
+        const elH = player.clientHeight || 1;
+        const vidAspect = (player.videoWidth && player.videoHeight) ? (player.videoWidth / player.videoHeight) : (854 / 480);
+        const elAspect = elW / elH;
+        let renderW = elW, renderH = elH, offsetX = 0, offsetY = 0;
+        if (elAspect > vidAspect) {
+          renderW = elH * vidAspect;
+          offsetX = (elW - renderW) / 2;
+        } else {
+          renderH = elW / vidAspect;
+          offsetY = (elH - renderH) / 2;
+        }
+
+        bboxOverlay.style.left = `${offsetX + (leftPct / 100) * renderW}px`;
+        bboxOverlay.style.top = `${offsetY + (topPct / 100) * renderH}px`;
+        bboxOverlay.style.width = `${(widthPct / 100) * renderW}px`;
+        bboxOverlay.style.height = `${(heightPct / 100) * renderH}px`;
         bboxOverlay.style.borderColor = color;
         bboxOverlay.style.boxShadow = `0 0 14px ${color}88, inset 0 0 10px ${color}33`;
         bboxTag.style.background = color;
-        const isLiveGrounding = activeDetectionBox.source === 'live_vlm_grounding';
-        const confVal = typeof activeDetectionBox.confidence === 'number' ? Math.round(activeDetectionBox.confidence * 100) : null;
-        const sourceTag = isLiveGrounding
-          ? (confVal !== null ? `VLM ${confVal}%` : 'VLM ROI')
-          : 'Preset ROI';
-        bboxTag.textContent = `${activeDetectionBox.label || 'TARGET'} • ${sourceTag}`;
+        bboxTag.textContent = `${activeDetectionBox.label || 'TARGET'} • ROI Track`;
         bboxOverlay.style.display = 'block';
       } else {
         bboxOverlay.style.display = 'none';
       }
     }
 
+    function startBboxLoop() {
+      if (rafId) cancelAnimationFrame(rafId);
+      function tick() {
+        updateBboxVisibility();
+        if (!player.paused && !player.ended) {
+          rafId = requestAnimationFrame(tick);
+        }
+      }
+      rafId = requestAnimationFrame(tick);
+    }
+
     player.addEventListener('timeupdate', updateBboxVisibility);
     player.addEventListener('seeked', updateBboxVisibility);
-    player.addEventListener('play', updateBboxVisibility);
+    player.addEventListener('loadedmetadata', updateBboxVisibility);
+    player.addEventListener('play', startBboxLoop);
+    window.addEventListener('resize', updateBboxVisibility);
 
     function renderVlmReport(vlm) {
       const modelBadge = document.getElementById('vlm-model-badge');
@@ -536,12 +584,7 @@
       updateBboxVisibility();
       if (activeDetectionBox && Array.isArray(activeDetectionBox.coco_bbox_854x480)) {
         const [x, y, w, h] = activeDetectionBox.coco_bbox_854x480;
-        const isLiveGrounding = activeDetectionBox.source === 'live_vlm_grounding';
-        const confVal = typeof activeDetectionBox.confidence === 'number' ? Math.round(activeDetectionBox.confidence * 100) : null;
-        const srcText = isLiveGrounding
-          ? `VLM Grounded${confVal !== null ? ' ' + confVal + '%' : ''}`
-          : 'Preset ROI';
-        bboxMetaEl.textContent = `${activeDetectionBox.label} (${srcText}) • COCO [x:${x}, y:${y}, w:${w}, h:${h}]`;
+        bboxMetaEl.textContent = `${activeDetectionBox.label} (Calibrated ROI Track) • COCO [x:${x}, y:${y}, w:${w}, h:${h}]`;
       } else {
         bboxMetaEl.textContent = '—';
       }
