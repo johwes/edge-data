@@ -441,6 +441,60 @@
     </div>
   </div>
 
+  <!-- Row 3: Human-in-the-Loop Edge AI Operations, Predictive Maintenance & Shift Copilot -->
+  <div style="margin-top: 24px; display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 20px;">
+    <!-- Card 1: Predictive Maintenance & Brake/Tire Thermal Watch -->
+    <div class="panel" style="border-top: 3px solid var(--accent-yellow);">
+      <div class="panel-header" style="margin-bottom: 12px; padding-bottom: 10px;">
+        <div>
+          <span style="font-size: 0.98rem;">Predictive Maintenance &amp; Thermal Watch</span><br>
+          <span style="font-size: 0.72rem; color: var(--text-muted); font-weight: 400;">100Hz CAN/IMU Spectral &amp; Downhill Brake/Strut Load</span>
+        </div>
+        <span class="badge" id="maint-count-badge" style="background: rgba(234, 179, 8, 0.16); color: var(--accent-yellow); border: 1px solid rgba(234, 179, 8, 0.4);">0 Alerts</span>
+      </div>
+      <div id="maint-list" style="display: flex; flex-direction: column; gap: 10px;">
+        <div style="color: var(--text-muted); font-size: 0.8125rem; padding: 10px; text-align: center;">Awaiting CAN/IMU telemetry stream...</div>
+      </div>
+    </div>
+
+    <!-- Card 2: Haul-Road, Berm & Spill Operator Advisories (Human-in-the-Loop) -->
+    <div class="panel" style="border-top: 3px solid var(--accent-blue);">
+      <div class="panel-header" style="margin-bottom: 12px; padding-bottom: 10px;">
+        <div>
+          <span style="font-size: 0.98rem;">Haul-Road, Berm &amp; Spill Advisories</span><br>
+          <span style="font-size: 0.72rem; color: var(--text-muted); font-weight: 400;">Uber H3 Spatial + VLM Tags &bull; Human-in-the-Loop Governance</span>
+        </div>
+        <span class="badge" id="advisory-count-badge" style="background: rgba(56, 189, 248, 0.16); color: var(--accent-blue); border: 1px solid rgba(56, 189, 248, 0.4);">HITL Mode</span>
+      </div>
+      <div id="advisory-list" style="display: flex; flex-direction: column; gap: 10px;">
+        <div style="color: var(--text-muted); font-size: 0.8125rem; padding: 10px; text-align: center;">Awaiting H3 sector hazard evaluation...</div>
+      </div>
+    </div>
+
+    <!-- Card 3: Shift-Handover AI Copilot (MSHA / ISO 17757 Brief) -->
+    <div class="panel" style="border-top: 3px solid var(--accent-green);">
+      <div class="panel-header" style="margin-bottom: 12px; padding-bottom: 10px;">
+        <div>
+          <span style="font-size: 0.98rem;">Shift-Handover AI Copilot</span><br>
+          <span style="font-size: 0.72rem; color: var(--text-muted); font-weight: 400;" id="shift-brief-source">MSHA / ISO 17757 Executive Summary</span>
+        </div>
+        <button id="refresh-brief-btn" onclick="refreshShiftBrief()" style="cursor: pointer; font-family: monospace; font-size: 0.72rem; background: rgba(34, 197, 94, 0.16); color: var(--accent-green); border: 1px solid rgba(34, 197, 94, 0.45); padding: 4px 10px; border-radius: 999px; font-weight: 600;">
+          [Synthesize via OpenShift AI]
+        </button>
+      </div>
+      <div id="shift-brief-headline" style="font-size: 0.82rem; font-weight: 700; color: #fff; margin-bottom: 8px; padding: 7px 10px; background: rgba(255,255,255,0.04); border-radius: 6px; border-left: 3px solid var(--accent-green);">
+        Waiting for shift telemetry...
+      </div>
+      <ul id="shift-brief-bullets" style="margin: 0 0 10px 0; padding-left: 18px; font-size: 0.80rem; color: var(--text-main); line-height: 1.55;">
+        <li style="color: var(--text-muted);">Shift summary will populate automatically as events are curated.</li>
+      </ul>
+      <div style="display: flex; justify-content: space-between; align-items: center; padding-top: 8px; border-top: 1px solid var(--card-border); font-size: 0.76rem;">
+        <span style="color: var(--text-muted);">Est. Downtime &amp; Tire Savings:</span>
+        <span id="shift-brief-savings" style="font-weight: 700; color: var(--accent-green); font-family: monospace;">$165,000 / shift</span>
+      </div>
+    </div>
+  </div>
+
   <script>
     const player = document.getElementById('player');
     const bboxOverlay = document.getElementById('bbox-overlay');
@@ -450,6 +504,9 @@
     let bboxEnabled = true;
     let activeDetectionBox = null;
     let rafId = null;
+    const approvedWorkOrders = new Set();
+    const approvedAdvisories = new Set();
+    let customLiveBrief = null;
 
     function toggleBbox() {
       bboxEnabled = !bboxEnabled;
@@ -651,6 +708,182 @@
       }
     }
 
+    function renderShiftBrief(brief) {
+      if (!brief) return;
+      const activeBrief = customLiveBrief || brief;
+      const headlineEl = document.getElementById('shift-brief-headline');
+      const bulletsEl = document.getElementById('shift-brief-bullets');
+      const sourceEl = document.getElementById('shift-brief-source');
+      const savingsEl = document.getElementById('shift-brief-savings');
+
+      headlineEl.textContent = String(activeBrief.headline || 'Shift Handover Brief');
+      const modeStr = activeBrief.source === 'live_openshift_ai' ? 'Live OpenShift AI Synthesis' : 'Edge Copilot Ready';
+      sourceEl.textContent = `${activeBrief.model || 'Qwen2.5-VL-7B-Instruct'} • ${modeStr}`;
+      savingsEl.textContent = String(activeBrief.est_savings_usd || '$165,000 / shift');
+
+      bulletsEl.replaceChildren();
+      const bullets = Array.isArray(activeBrief.bullets) ? activeBrief.bullets : [];
+      bullets.forEach(b => {
+        const li = document.createElement('li');
+        li.style.marginBottom = '6px';
+        li.textContent = String(b);
+        bulletsEl.appendChild(li);
+      });
+    }
+
+    async function refreshShiftBrief() {
+      const btn = document.getElementById('refresh-brief-btn');
+      btn.textContent = '[Synthesizing...]';
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/shift-brief?t=' + Date.now());
+        if (res.ok) {
+          const brief = await res.json();
+          customLiveBrief = brief;
+          renderShiftBrief(brief);
+        }
+      } catch (err) {
+        console.error('Failed to synthesize shift brief:', err);
+      } finally {
+        btn.textContent = '[Synthesize via OpenShift AI]';
+        btn.disabled = false;
+      }
+    }
+
+    function renderEdgeOperations(data) {
+      // 1. Predictive Maintenance List
+      const maintList = document.getElementById('maint-list');
+      const maintBadge = document.getElementById('maint-count-badge');
+      const alerts = Array.isArray(data.maintenance_alerts) ? data.maintenance_alerts : [];
+      maintBadge.textContent = `${alerts.length} Work Orders`;
+      maintList.replaceChildren();
+
+      if (alerts.length === 0) {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'color: var(--text-muted); font-size: 0.8125rem; padding: 10px; text-align: center;';
+        empty.textContent = 'Awaiting CAN/IMU telemetry stream...';
+        maintList.appendChild(empty);
+      } else {
+        alerts.forEach(item => {
+          const card = document.createElement('div');
+          card.style.cssText = 'padding: 10px 12px; background: rgba(255,255,255,0.03); border: 1px solid var(--card-border); border-radius: 8px; font-size: 0.79rem;';
+
+          const header = document.createElement('div');
+          header.style.cssText = 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;';
+          const title = document.createElement('strong');
+          title.style.color = '#fff';
+          title.textContent = `${item.wo_id} • ${item.truck_id}`;
+          const daysBadge = document.createElement('span');
+          const isCrit = item.severity === 'CRITICAL';
+          daysBadge.style.cssText = `font-family: monospace; font-size: 0.70rem; padding: 2px 7px; border-radius: 999px; font-weight: 700; background: ${isCrit ? 'rgba(239,68,68,0.18)' : 'rgba(234,179,8,0.18)'}; color: ${isCrit ? '#ef4444' : '#eab308'};`;
+          daysBadge.textContent = `Est. ${item.est_days_to_failure}d to failure`;
+          header.appendChild(title);
+          header.appendChild(daysBadge);
+
+          const comp = document.createElement('div');
+          comp.style.cssText = 'color: var(--accent-blue); font-weight: 600; margin-bottom: 3px;';
+          comp.textContent = String(item.component || '');
+
+          const metric = document.createElement('div');
+          metric.style.cssText = 'color: var(--text-muted); font-size: 0.75rem; margin-bottom: 6px;';
+          metric.textContent = `${item.metric_label} — ${item.recommended_action}`;
+
+          const actionRow = document.createElement('div');
+          actionRow.style.cssText = 'display: flex; justify-content: flex-end;';
+          const btn = document.createElement('button');
+          const isApproved = approvedWorkOrders.has(item.wo_id);
+          btn.style.cssText = `cursor: pointer; font-family: monospace; font-size: 0.71rem; padding: 3px 9px; border-radius: 6px; font-weight: 600; border: 1px solid ${isApproved ? 'rgba(34,197,94,0.5)' : 'rgba(234,179,8,0.45)'}; background: ${isApproved ? 'rgba(34,197,94,0.16)' : 'rgba(234,179,8,0.12)'}; color: ${isApproved ? '#22c55e' : '#eab308'};`;
+          btn.textContent = isApproved ? '✓ Approved for Maintenance Bay' : '[Approve Work Order (HITL)]';
+          btn.onclick = () => {
+            if (approvedWorkOrders.has(item.wo_id)) {
+              approvedWorkOrders.delete(item.wo_id);
+            } else {
+              approvedWorkOrders.add(item.wo_id);
+            }
+            renderEdgeOperations(data);
+          };
+          actionRow.appendChild(btn);
+
+          card.appendChild(header);
+          card.appendChild(comp);
+          card.appendChild(metric);
+          card.appendChild(actionRow);
+          maintList.appendChild(card);
+        });
+      }
+
+      // 2. Haul-Road, Berm & Spill Operator Advisories
+      const advList = document.getElementById('advisory-list');
+      const advBadge = document.getElementById('advisory-count-badge');
+      const advisories = Array.isArray(data.road_advisories) ? data.road_advisories : [];
+      advBadge.textContent = `${advisories.length} Advisories (HITL)`;
+      advList.replaceChildren();
+
+      if (advisories.length === 0) {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'color: var(--text-muted); font-size: 0.8125rem; padding: 10px; text-align: center;';
+        empty.textContent = 'Awaiting H3 sector hazard evaluation...';
+        advList.appendChild(empty);
+      } else {
+        advisories.forEach(adv => {
+          const card = document.createElement('div');
+          card.style.cssText = 'padding: 10px 12px; background: rgba(255,255,255,0.03); border: 1px solid var(--card-border); border-radius: 8px; font-size: 0.79rem;';
+
+          const header = document.createElement('div');
+          header.style.cssText = 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;';
+          const title = document.createElement('strong');
+          title.style.color = '#fff';
+          title.textContent = `${adv.advisory_id} • ${adv.sector}`;
+          const sevBadge = document.createElement('span');
+          const isCrit = adv.severity === 'CRITICAL';
+          sevBadge.style.cssText = `font-family: monospace; font-size: 0.70rem; padding: 2px 7px; border-radius: 999px; font-weight: 700; background: ${isCrit ? 'rgba(239,68,68,0.18)' : 'rgba(56,189,248,0.18)'}; color: ${isCrit ? '#ef4444' : '#38bdf8'};`;
+          sevBadge.textContent = String(adv.severity || 'HIGH');
+          header.appendChild(title);
+          header.appendChild(sevBadge);
+
+          const hazard = document.createElement('div');
+          hazard.style.cssText = 'color: var(--accent-yellow); font-weight: 600; margin-bottom: 3px;';
+          hazard.textContent = String(adv.hazard_type || '');
+
+          const rec = document.createElement('div');
+          rec.style.cssText = 'color: var(--text-main); font-size: 0.75rem; margin-bottom: 3px;';
+          rec.textContent = `Dispatch: ${adv.dispatch_recommendation}`;
+
+          const pol = document.createElement('div');
+          pol.style.cssText = 'color: var(--text-muted); font-family: monospace; font-size: 0.72rem; margin-bottom: 6px;';
+          pol.textContent = String(adv.policy_advisory || '');
+
+          const actionRow = document.createElement('div');
+          actionRow.style.cssText = 'display: flex; justify-content: flex-end;';
+          const btn = document.createElement('button');
+          const isAck = approvedAdvisories.has(adv.advisory_id);
+          btn.style.cssText = `cursor: pointer; font-family: monospace; font-size: 0.71rem; padding: 3px 9px; border-radius: 6px; font-weight: 600; border: 1px solid ${isAck ? 'rgba(34,197,94,0.5)' : 'rgba(56,189,248,0.45)'}; background: ${isAck ? 'rgba(34,197,94,0.16)' : 'rgba(56,189,248,0.12)'}; color: ${isAck ? '#22c55e' : '#38bdf8'};`;
+          btn.textContent = isAck ? '✓ Operator Approved & Dispatched' : '[Approve Dispatch & Policy (HITL)]';
+          btn.onclick = () => {
+            if (approvedAdvisories.has(adv.advisory_id)) {
+              approvedAdvisories.delete(adv.advisory_id);
+            } else {
+              approvedAdvisories.add(adv.advisory_id);
+            }
+            renderEdgeOperations(data);
+          };
+          actionRow.appendChild(btn);
+
+          card.appendChild(header);
+          card.appendChild(hazard);
+          card.appendChild(rec);
+          card.appendChild(pol);
+          card.appendChild(actionRow);
+          advList.appendChild(card);
+        });
+      }
+
+      // 3. Shift-Handover Brief
+      if (data.shift_brief) {
+        renderShiftBrief(data.shift_brief);
+      }
+    }
+
     async function updateDashboard() {
       try {
         const res = await fetch('/api/status');
@@ -669,6 +902,8 @@
 
         document.getElementById('discarded-count').innerText = `${data.events_discarded || 0}`;
         document.getElementById('dedup-sub').innerText = `${data.dedup_suppressions || 0} duplicate hauls suppressed`;
+
+        renderEdgeOperations(data);
 
         // Update Videos
         const videoList = document.getElementById('video-list');

@@ -103,7 +103,7 @@ class UnifiedMetricsHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", CONTENT_TYPE_LATEST)
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
-        elif url_path == "/api/status":
+        elif url_path in ["/api/status", "/api/shift-brief"]:
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -132,7 +132,10 @@ class UnifiedMetricsHandler(BaseHTTPRequestHandler):
                 pass
 
         elif url_path == "/api/status":
-            self.handle_api_status()
+            self.handle_api_status(force_live_brief=False)
+
+        elif url_path == "/api/shift-brief":
+            self.handle_api_status(force_live_brief=True, brief_only=True)
 
         elif url_path.startswith("/videos/"):
             video_name = unquote(url_path[len("/videos/"):])
@@ -146,10 +149,13 @@ class UnifiedMetricsHandler(BaseHTTPRequestHandler):
         else:
             self.send_error(404, "Not Found")
 
-    def handle_api_status(self):
+    def handle_api_status(self, force_live_brief: bool = False, brief_only: bool = False):
+        from .pipeline import generate_shift_handover_brief
+
         # Scan curated dir for video files and MCAPs
         videos = []
         curated_files = []
+        vlm_by_event = {}
         try:
             if self.curated_dir.exists():
                 for p in sorted(self.curated_dir.glob("*.mp4"), key=lambda x: x.stat().st_mtime, reverse=True):
@@ -158,6 +164,8 @@ class UnifiedMetricsHandler(BaseHTTPRequestHandler):
                     if vlm_file.exists():
                         try:
                             vlm_data = json.loads(vlm_file.read_text(encoding="utf-8"))
+                            if isinstance(vlm_data, dict) and vlm_data.get("event_id"):
+                                vlm_by_event[vlm_data["event_id"]] = vlm_data
                         except Exception:
                             vlm_data = None
                     videos.append({
@@ -213,6 +221,16 @@ class UnifiedMetricsHandler(BaseHTTPRequestHandler):
         if events_curated == 0 and curated_files:
             events_curated = len(curated_files)
 
+        maint_alerts = list(getattr(self.pipeline_ref, "maintenance_alerts", []) or []) if self.pipeline_ref else []
+        road_advisories = []
+        raw_advisories = list(getattr(self.pipeline_ref, "road_advisories", []) or []) if self.pipeline_ref else []
+        for adv in raw_advisories:
+            enriched = dict(adv)
+            vlm_match = vlm_by_event.get(enriched.get("event_id", ""))
+            if vlm_match and vlm_match.get("root_cause"):
+                enriched["vlm_context"] = vlm_match.get("root_cause")
+            road_advisories.append(enriched)
+
         payload = {
             "cell_id": getattr(self.pipeline_ref, "cell_id", "pilbara-cell-04") if self.pipeline_ref else "pilbara-cell-04",
             "bytes_ingested": ingested_bytes,
@@ -223,10 +241,15 @@ class UnifiedMetricsHandler(BaseHTTPRequestHandler):
             "events_discarded": events_discarded,
             "dedup_suppressions": dedup_suppressions,
             "videos": videos,
-            "curated_files": curated_files[:25]
+            "curated_files": curated_files[:25],
+            "maintenance_alerts": maint_alerts,
+            "road_advisories": road_advisories,
         }
+        shift_brief = generate_shift_handover_brief(payload, force_live=force_live_brief)
+        payload["shift_brief"] = shift_brief
 
-        resp_bytes = json.dumps(payload).encode("utf-8")
+        out_obj = shift_brief if brief_only else payload
+        resp_bytes = json.dumps(out_obj).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(resp_bytes)))
