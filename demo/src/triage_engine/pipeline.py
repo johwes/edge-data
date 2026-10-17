@@ -6,13 +6,16 @@ import json
 import base64
 import random
 import shutil
-import threading
 import subprocess
 import urllib.request
 import logging
 from pathlib import Path
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, Any, List, Tuple
+
+# Bounded worker pool for asynchronous Stage-2 VLM video analysis
+VLM_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="vlm-worker")
 
 try:
     from usearch.index import Index
@@ -831,17 +834,14 @@ class TriagePipeline:
             )
             if extracted_size:
                 video_clip_bytes = extracted_size
-                threading.Thread(
-                    target=analyze_video_clip_with_vlm,
-                    args=(
-                        curated_clip_path,
-                        event_id,
-                        str(meta.get("truck_id", "HT_402_400T")),
-                        tier,
-                        dict(can_data),
-                    ),
-                    daemon=True,
-                ).start()
+                VLM_EXECUTOR.submit(
+                    analyze_video_clip_with_vlm,
+                    curated_clip_path,
+                    event_id,
+                    str(meta.get("truck_id", "HT_402_400T")),
+                    tier,
+                    dict(can_data),
+                )
             # Purge raw 30s video from ingest volume
             raw_vid_path.unlink(missing_ok=True)
 

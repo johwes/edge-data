@@ -108,10 +108,17 @@ oc start-build edge-triage-builder --from-dir=demo/src --follow
 ### Step 3: Deploy the Triage Worker and Prometheus Monitoring
 
 ```bash
-# 1. Deploy the triage worker service
+# 1. (Optional) Configure OpenShift AI Vision-Language Model (VLM) Secret
+# If omitted, no video frames leave the cluster and the worker uses its local edge-cached forensic analyzer.
+oc create secret generic edge-triage-vlm-secret \
+  --from-literal=VLM_API_URL=https://litemaas.rhoai.rh-aiservices-bu.com/v1/chat/completions \
+  --from-literal=VLM_API_KEY=<YOUR_API_KEY> \
+  --from-literal=VLM_MODEL=Qwen2.5-VL-7B-Instruct
+
+# 2. Deploy the triage worker service
 oc apply -f demo/k8s/04_triage_deployment.yaml
 
-# 2. Expose the metrics endpoint and configure OpenShift ServiceMonitor
+# 3. Expose the metrics endpoint, Web Dashboard Route, and OpenShift ServiceMonitor
 oc apply -f demo/k8s/06_monitoring.yaml
 ```
 

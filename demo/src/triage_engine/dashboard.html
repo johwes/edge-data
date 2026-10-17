@@ -447,20 +447,32 @@
       sevBadge.className = 'badge badge-tier1';
       rootCauseEl.innerText = vlm.root_cause || '—';
 
-      if (Array.isArray(vlm.visual_progression) && vlm.visual_progression.length > 0) {
-        progEl.innerHTML = vlm.visual_progression.map(step => `<li style="margin-bottom: 4px;">${step}</li>`).join('');
-      } else {
-        progEl.innerHTML = `<li style="margin-bottom: 4px;">${vlm.visual_progression || '—'}</li>`;
-      }
+      progEl.replaceChildren();
+      const steps = Array.isArray(vlm.visual_progression) && vlm.visual_progression.length > 0
+        ? vlm.visual_progression
+        : [vlm.visual_progression || '—'];
+      steps.forEach(step => {
+        const li = document.createElement('li');
+        li.style.marginBottom = '4px';
+        li.textContent = String(step);
+        progEl.appendChild(li);
+      });
 
       dispatchEl.innerText = vlm.dispatch_action || '—';
 
+      tagsEl.replaceChildren();
       if (Array.isArray(vlm.semantic_tags) && vlm.semantic_tags.length > 0) {
-        tagsEl.innerHTML = vlm.semantic_tags.map(tag =>
-          `<span style="font-family: monospace; font-size: 0.72rem; background: rgba(34, 197, 94, 0.14); color: var(--accent-green); border: 1px solid rgba(34, 197, 94, 0.35); padding: 2px 8px; border-radius: 999px;">#${tag}</span>`
-        ).join('');
+        vlm.semantic_tags.forEach(tag => {
+          const span = document.createElement('span');
+          span.style.cssText = 'font-family: monospace; font-size: 0.72rem; background: rgba(34, 197, 94, 0.14); color: var(--accent-green); border: 1px solid rgba(34, 197, 94, 0.35); padding: 2px 8px; border-radius: 999px;';
+          span.textContent = `#${tag}`;
+          tagsEl.appendChild(span);
+        });
       } else {
-        tagsEl.innerHTML = '<span style="font-size: 0.75rem; color: var(--text-muted);">—</span>';
+        const emptySpan = document.createElement('span');
+        emptySpan.style.cssText = 'font-size: 0.75rem; color: var(--text-muted);';
+        emptySpan.textContent = '—';
+        tagsEl.appendChild(emptySpan);
       }
     }
 
