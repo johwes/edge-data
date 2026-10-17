@@ -279,11 +279,22 @@
     <div class="panel">
       <div class="panel-header">
         <span>Extracted Incident Video Clips (FFmpeg Temporal Slicing)</span>
-        <span class="badge badge-tier1" id="active-tier-badge">Tier 1 Forensic</span>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button id="toggle-bbox-btn" onclick="toggleBbox()" style="cursor: pointer; font-family: monospace; font-size: 0.72rem; background: rgba(56, 189, 248, 0.16); color: var(--accent-blue); border: 1px solid rgba(56, 189, 248, 0.45); padding: 3px 9px; border-radius: 999px; font-weight: 600;">
+            [AI Decision-Box: ON]
+          </button>
+          <span class="badge badge-tier1" id="active-tier-badge">Tier 1 Forensic</span>
+        </div>
       </div>
 
-      <div class="video-container">
+      <div class="video-container" style="position: relative;">
         <video id="player" controls autoplay muted playsinline preload="auto"></video>
+        <!-- Decision-Box 2D Spatial Grounding Overlay -->
+        <div id="bbox-overlay" style="display: none; position: absolute; pointer-events: none; border: 2px solid #ef4444; box-shadow: 0 0 14px rgba(239, 68, 68, 0.55), inset 0 0 10px rgba(239, 68, 68, 0.25); border-radius: 4px; transition: all 0.15s ease;">
+          <div id="bbox-tag" style="position: absolute; top: -24px; left: -2px; background: rgba(239, 68, 68, 0.92); color: #fff; font-family: monospace; font-size: 0.70rem; font-weight: 700; padding: 2px 7px; border-radius: 3px; white-space: nowrap; letter-spacing: 0.04em;">
+            TARGET • 96%
+          </div>
+        </div>
       </div>
 
       <div class="video-meta">
@@ -301,7 +312,7 @@
         </div>
         <div class="meta-row">
           <span class="meta-label">Data Reduction:</span>
-          <span class="meta-val" style="color: var(--accent-green);">1,259 KB raw &rarr; ~190 KB curated (85% reduction)</span>
+          <span class="meta-val" style="color: var(--accent-green);">3,640 KB raw &rarr; ~1,650 KB curated + AI Ground Truth</span>
         </div>
       </div>
 
@@ -312,8 +323,8 @@
       <!-- Stage-2 OpenShift AI Vision Forensic Analysis Card -->
       <div class="video-meta" id="vlm-panel" style="margin-top: 16px; border-left: 3px solid var(--accent-blue); background: rgba(56, 189, 248, 0.05);">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid var(--border); padding-bottom: 8px;">
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="font-weight: 700; font-size: 0.875rem; color: var(--accent-blue);">OpenShift AI Vision Forensic Analysis</span>
+          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+            <span style="font-weight: 700; font-size: 0.875rem; color: var(--accent-blue);">OpenShift AI Vision &amp; Decision Engine</span>
             <span id="vlm-model-badge" style="font-family: monospace; font-size: 0.72rem; background: rgba(56, 189, 248, 0.14); color: var(--accent-blue); padding: 2px 8px; border-radius: 999px;">Qwen2.5-VL-7B-Instruct</span>
           </div>
           <span class="badge badge-tier1" id="vlm-severity-badge">Awaiting Clip</span>
@@ -322,6 +333,14 @@
         <div class="meta-row" style="align-items: flex-start;">
           <span class="meta-label" style="min-width: 140px;">Visual Root Cause:</span>
           <span class="meta-val" id="vlm-root-cause" style="text-align: right; font-weight: 600; color: var(--text);">Waiting for Stage-2 VLM keyframe analysis...</span>
+        </div>
+
+        <!-- System-1 Calibrated Probabilistic Decision Matrix -->
+        <div style="margin: 10px 0; padding: 10px 12px; background: rgba(15, 23, 42, 0.65); border-radius: 6px; border: 1px solid var(--border);">
+          <div style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 8px;">Calibrated Safety Decision Matrix (System-1 Probabilities)</div>
+          <div id="vlm-matrix" style="display: flex; flex-direction: column; gap: 7px;">
+            <div style="font-size: 0.75rem; color: var(--text-muted);">Awaiting probabilistic scoring...</div>
+          </div>
         </div>
 
         <div style="margin: 10px 0; padding: 10px 12px; background: rgba(15, 23, 42, 0.65); border-radius: 6px; border: 1px solid var(--border);">
@@ -336,8 +355,13 @@
           <span class="meta-val" id="vlm-dispatch" style="text-align: right; color: var(--accent-yellow);">—</span>
         </div>
 
+        <div class="meta-row" style="align-items: center;">
+          <span class="meta-label">Decision-Box Ground Truth:</span>
+          <span class="meta-val" id="vlm-bbox-meta" style="font-family: monospace; font-size: 0.75rem; color: var(--accent-blue);">—</span>
+        </div>
+
         <div class="meta-row" style="align-items: center; margin-top: 6px;">
-          <span class="meta-label">Auto-Labeled Tags:</span>
+          <span class="meta-label">Auto-Labeled GDS Tags:</span>
           <div id="vlm-tags" style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end;">
             <span style="font-size: 0.75rem; color: var(--text-muted);">—</span>
           </div>
@@ -419,25 +443,81 @@
 
   <script>
     const player = document.getElementById('player');
+    const bboxOverlay = document.getElementById('bbox-overlay');
+    const bboxTag = document.getElementById('bbox-tag');
     let currentVideo = null;
     let videoMap = {};
+    let bboxEnabled = true;
+    let activeDetectionBox = null;
+
+    function toggleBbox() {
+      bboxEnabled = !bboxEnabled;
+      const btn = document.getElementById('toggle-bbox-btn');
+      btn.textContent = bboxEnabled ? '[AI Decision-Box: ON]' : '[AI Decision-Box: OFF]';
+      btn.style.opacity = bboxEnabled ? '1.0' : '0.5';
+      updateBboxVisibility();
+    }
+
+    function updateBboxVisibility() {
+      if (!bboxEnabled || !activeDetectionBox || !currentVideo) {
+        bboxOverlay.style.display = 'none';
+        return;
+      }
+      const t = player.currentTime || 0;
+      const win = activeDetectionBox.active_window_sec || [0, 10];
+      if (t >= win[0] && t <= win[1]) {
+        const [leftPct, topPct, widthPct, heightPct] = activeDetectionBox.bbox_pct || [35, 43, 28, 35];
+        const isHazard = (activeDetectionBox.label || '').includes('ROCK') || (activeDetectionBox.label || '').includes('OBSTRUCTION');
+        const color = isHazard ? '#ef4444' : '#38bdf8';
+        bboxOverlay.style.left = `${leftPct}%`;
+        bboxOverlay.style.top = `${topPct}%`;
+        bboxOverlay.style.width = `${widthPct}%`;
+        bboxOverlay.style.height = `${heightPct}%`;
+        bboxOverlay.style.borderColor = color;
+        bboxOverlay.style.boxShadow = `0 0 14px ${color}88, inset 0 0 10px ${color}33`;
+        bboxTag.style.background = color;
+        const confPct = Math.round((activeDetectionBox.confidence || 0.96) * 100);
+        bboxTag.textContent = `${activeDetectionBox.label || 'TARGET'} • ${confPct}%`;
+        bboxOverlay.style.display = 'block';
+      } else {
+        bboxOverlay.style.display = 'none';
+      }
+    }
+
+    player.addEventListener('timeupdate', updateBboxVisibility);
+    player.addEventListener('seeked', updateBboxVisibility);
+    player.addEventListener('play', updateBboxVisibility);
 
     function renderVlmReport(vlm) {
       const modelBadge = document.getElementById('vlm-model-badge');
       const sevBadge = document.getElementById('vlm-severity-badge');
       const rootCauseEl = document.getElementById('vlm-root-cause');
       const progEl = document.getElementById('vlm-progression');
+      const matrixEl = document.getElementById('vlm-matrix');
       const dispatchEl = document.getElementById('vlm-dispatch');
+      const bboxMetaEl = document.getElementById('vlm-bbox-meta');
       const tagsEl = document.getElementById('vlm-tags');
 
       if (!vlm) {
+        activeDetectionBox = null;
+        updateBboxVisibility();
         modelBadge.innerText = 'Qwen2.5-VL-7B-Instruct';
         sevBadge.innerText = 'Analyzing...';
         sevBadge.className = 'badge';
         rootCauseEl.innerText = 'Running Stage-2 VLM inference on extracted keyframes...';
-        progEl.innerHTML = '<li style="color: var(--text-muted);">Extracting keyframes (t=1.0s, t=4.5s, t=8.5s) and querying OpenShift AI...</li>';
+        matrixEl.replaceChildren();
+        const waitDiv = document.createElement('div');
+        waitDiv.style.cssText = 'font-size: 0.75rem; color: var(--text-muted);';
+        waitDiv.textContent = 'Computing System-1 safety decision probabilities...';
+        matrixEl.appendChild(waitDiv);
+        progEl.replaceChildren();
+        const waitLi = document.createElement('li');
+        waitLi.style.color = 'var(--text-muted)';
+        waitLi.textContent = 'Extracting keyframes (t=1.0s, t=4.5s, t=8.5s) and querying OpenShift AI...';
+        progEl.appendChild(waitLi);
         dispatchEl.innerText = '—';
-        tagsEl.innerHTML = '<span style="font-size: 0.75rem; color: var(--text-muted);">—</span>';
+        bboxMetaEl.textContent = '—';
+        tagsEl.replaceChildren();
         return;
       }
 
@@ -446,6 +526,49 @@
       sevBadge.innerText = `Severity: ${vlm.severity || 'HIGH'}`;
       sevBadge.className = 'badge badge-tier1';
       rootCauseEl.innerText = vlm.root_cause || '—';
+
+      // Render Decision-Box Spatial Overlay & COCO Metadata
+      activeDetectionBox = vlm.detection_box || null;
+      updateBboxVisibility();
+      if (activeDetectionBox && Array.isArray(activeDetectionBox.coco_bbox_854x480)) {
+        const [x, y, w, h] = activeDetectionBox.coco_bbox_854x480;
+        const confPct = Math.round((activeDetectionBox.confidence || 0.96) * 100);
+        bboxMetaEl.textContent = `${activeDetectionBox.label} (${confPct}%) • COCO [x:${x}, y:${y}, w:${w}, h:${h}]`;
+      } else {
+        bboxMetaEl.textContent = '—';
+      }
+
+      // Render System-1 Calibrated Decision Matrix
+      matrixEl.replaceChildren();
+      if (Array.isArray(vlm.decision_matrix) && vlm.decision_matrix.length > 0) {
+        vlm.decision_matrix.forEach(item => {
+          const row = document.createElement('div');
+          const topRow = document.createElement('div');
+          topRow.style.cssText = 'display: flex; justify-content: space-between; font-size: 0.76rem; margin-bottom: 3px;';
+          const lbl = document.createElement('span');
+          lbl.style.color = 'var(--text)';
+          lbl.textContent = String(item.metric || '');
+          const pctVal = Math.max(0, Math.min(100, Number(item.probability_pct) || 0));
+          const valSpan = document.createElement('span');
+          valSpan.style.fontFamily = 'monospace';
+          valSpan.style.fontWeight = '700';
+          const barColor = item.color === 'red' ? '#ef4444' : item.color === 'yellow' ? '#eab308' : '#22c55e';
+          valSpan.style.color = barColor;
+          valSpan.textContent = `${pctVal}%`;
+          topRow.appendChild(lbl);
+          topRow.appendChild(valSpan);
+
+          const track = document.createElement('div');
+          track.style.cssText = 'width: 100%; height: 6px; background: rgba(255,255,255,0.08); border-radius: 999px; overflow: hidden;';
+          const fill = document.createElement('div');
+          fill.style.cssText = `width: ${pctVal}%; height: 100%; background: ${barColor}; border-radius: 999px; transition: width 0.3s ease;`;
+          track.appendChild(fill);
+
+          row.appendChild(topRow);
+          row.appendChild(track);
+          matrixEl.appendChild(row);
+        });
+      }
 
       progEl.replaceChildren();
       const steps = Array.isArray(vlm.visual_progression) && vlm.visual_progression.length > 0
