@@ -281,7 +281,7 @@
         <span>Extracted Incident Video Clips (FFmpeg Temporal Slicing)</span>
         <div style="display: flex; gap: 8px; align-items: center;">
           <button id="toggle-bbox-btn" onclick="toggleBbox()" style="cursor: pointer; font-family: monospace; font-size: 0.72rem; background: rgba(56, 189, 248, 0.16); color: var(--accent-blue); border: 1px solid rgba(56, 189, 248, 0.45); padding: 3px 9px; border-radius: 999px; font-weight: 600;">
-            [AI Decision-Box: ON]
+            [ROI Overlay: ON]
           </button>
           <span class="badge badge-tier1" id="active-tier-badge">Tier 1 Forensic</span>
         </div>
@@ -289,10 +289,10 @@
 
       <div class="video-container" style="position: relative;">
         <video id="player" controls autoplay muted playsinline preload="auto"></video>
-        <!-- Decision-Box 2D Spatial Grounding Overlay -->
+        <!-- Decision-Box 2D Spatial ROI Overlay -->
         <div id="bbox-overlay" style="display: none; position: absolute; pointer-events: none; border: 2px solid #ef4444; box-shadow: 0 0 14px rgba(239, 68, 68, 0.55), inset 0 0 10px rgba(239, 68, 68, 0.25); border-radius: 4px; transition: all 0.15s ease;">
           <div id="bbox-tag" style="position: absolute; top: -24px; left: -2px; background: rgba(239, 68, 68, 0.92); color: #fff; font-family: monospace; font-size: 0.70rem; font-weight: 700; padding: 2px 7px; border-radius: 3px; white-space: nowrap; letter-spacing: 0.04em;">
-            TARGET • 96%
+            TARGET
           </div>
         </div>
       </div>
@@ -312,7 +312,7 @@
         </div>
         <div class="meta-row">
           <span class="meta-label">Data Reduction:</span>
-          <span class="meta-val" style="color: var(--accent-green);">3,640 KB raw &rarr; ~1,650 KB curated + AI Ground Truth</span>
+          <span class="meta-val" style="color: var(--accent-green);">3,640 KB raw &rarr; ~1,650 KB curated + VLM Sidecar</span>
         </div>
       </div>
 
@@ -356,7 +356,7 @@
         </div>
 
         <div class="meta-row" style="align-items: center;">
-          <span class="meta-label">Decision-Box Ground Truth:</span>
+          <span class="meta-label">Spatial ROI Box:</span>
           <span class="meta-val" id="vlm-bbox-meta" style="font-family: monospace; font-size: 0.75rem; color: var(--accent-blue);">—</span>
         </div>
 
@@ -453,7 +453,7 @@
     function toggleBbox() {
       bboxEnabled = !bboxEnabled;
       const btn = document.getElementById('toggle-bbox-btn');
-      btn.textContent = bboxEnabled ? '[AI Decision-Box: ON]' : '[AI Decision-Box: OFF]';
+      btn.textContent = bboxEnabled ? '[ROI Overlay: ON]' : '[ROI Overlay: OFF]';
       btn.style.opacity = bboxEnabled ? '1.0' : '0.5';
       updateBboxVisibility();
     }
@@ -467,7 +467,7 @@
       const win = activeDetectionBox.active_window_sec || [0, 10];
       if (t >= win[0] && t <= win[1]) {
         const [leftPct, topPct, widthPct, heightPct] = activeDetectionBox.bbox_pct || [35, 43, 28, 35];
-        const isHazard = (activeDetectionBox.label || '').includes('ROCK') || (activeDetectionBox.label || '').includes('OBSTRUCTION');
+        const isHazard = (activeDetectionBox.label || '').includes('ROCK') || (activeDetectionBox.label || '').includes('OBSTRUCTION') || (activeDetectionBox.label || '').includes('BOULDER');
         const color = isHazard ? '#ef4444' : '#38bdf8';
         bboxOverlay.style.left = `${leftPct}%`;
         bboxOverlay.style.top = `${topPct}%`;
@@ -476,8 +476,12 @@
         bboxOverlay.style.borderColor = color;
         bboxOverlay.style.boxShadow = `0 0 14px ${color}88, inset 0 0 10px ${color}33`;
         bboxTag.style.background = color;
-        const confPct = Math.round((activeDetectionBox.confidence || 0.96) * 100);
-        bboxTag.textContent = `${activeDetectionBox.label || 'TARGET'} • ${confPct}%`;
+        const isLiveGrounding = activeDetectionBox.source === 'live_vlm_grounding';
+        const confVal = typeof activeDetectionBox.confidence === 'number' ? Math.round(activeDetectionBox.confidence * 100) : null;
+        const sourceTag = isLiveGrounding
+          ? (confVal !== null ? `VLM ${confVal}%` : 'VLM ROI')
+          : 'Preset ROI';
+        bboxTag.textContent = `${activeDetectionBox.label || 'TARGET'} • ${sourceTag}`;
         bboxOverlay.style.display = 'block';
       } else {
         bboxOverlay.style.display = 'none';
@@ -527,13 +531,17 @@
       sevBadge.className = 'badge badge-tier1';
       rootCauseEl.innerText = vlm.root_cause || '—';
 
-      // Render Decision-Box Spatial Overlay & COCO Metadata
+      // Render Spatial ROI Overlay & COCO Metadata with explicit source attribution
       activeDetectionBox = vlm.detection_box || null;
       updateBboxVisibility();
       if (activeDetectionBox && Array.isArray(activeDetectionBox.coco_bbox_854x480)) {
         const [x, y, w, h] = activeDetectionBox.coco_bbox_854x480;
-        const confPct = Math.round((activeDetectionBox.confidence || 0.96) * 100);
-        bboxMetaEl.textContent = `${activeDetectionBox.label} (${confPct}%) • COCO [x:${x}, y:${y}, w:${w}, h:${h}]`;
+        const isLiveGrounding = activeDetectionBox.source === 'live_vlm_grounding';
+        const confVal = typeof activeDetectionBox.confidence === 'number' ? Math.round(activeDetectionBox.confidence * 100) : null;
+        const srcText = isLiveGrounding
+          ? `VLM Grounded${confVal !== null ? ' ' + confVal + '%' : ''}`
+          : 'Preset ROI';
+        bboxMetaEl.textContent = `${activeDetectionBox.label} (${srcText}) • COCO [x:${x}, y:${y}, w:${w}, h:${h}]`;
       } else {
         bboxMetaEl.textContent = '—';
       }
@@ -548,7 +556,8 @@
           const lbl = document.createElement('span');
           lbl.style.color = 'var(--text)';
           lbl.textContent = String(item.metric || '');
-          const pctVal = Math.max(0, Math.min(100, Number(item.probability_pct) || 0));
+          const rawNum = Number(item.probability_pct);
+          const pctVal = Number.isFinite(rawNum) ? Math.max(0, Math.min(100, Math.round(rawNum))) : 0;
           const valSpan = document.createElement('span');
           valSpan.style.fontFamily = 'monospace';
           valSpan.style.fontWeight = '700';

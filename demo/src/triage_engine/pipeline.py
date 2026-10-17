@@ -235,6 +235,44 @@ def extract_video_clip(
         return None
 
 
+def _safe_pct(val: Any, default: int) -> int:
+    """Safely parse a percentage 0..100 without turning legitimate 0 into default or raising ValueError."""
+    if val is None or isinstance(val, bool):
+        return default
+    if isinstance(val, (int, float)):
+        if math.isnan(val) or math.isinf(val):
+            return default
+        return max(0, min(100, int(round(val))))
+    if isinstance(val, str):
+        cleaned_str = val.strip().rstrip("%").strip()
+        try:
+            num = float(cleaned_str)
+            if math.isnan(num) or math.isinf(num):
+                return default
+            return max(0, min(100, int(round(num))))
+        except ValueError:
+            return default
+    return default
+
+
+def _safe_bbox_pct(val: Any) -> Optional[List[int]]:
+    """Validate [left_pct, top_pct, width_pct, height_pct] returned by VLM in 0..100 image space."""
+    if not isinstance(val, list) or len(val) != 4:
+        return None
+    parsed: List[int] = []
+    for item in val:
+        pct = _safe_pct(item, -1)
+        if pct < 0:
+            return None
+        parsed.append(pct)
+    left, top, width, height = parsed
+    if left > 90 or top > 90 or width < 5 or height < 5:
+        return None
+    width = min(width, 100 - left)
+    height = min(height, 100 - top)
+    return [left, top, width, height]
+
+
 def analyze_video_clip_with_vlm(
     clip_path: Path,
     event_id: str,
@@ -295,6 +333,7 @@ def analyze_video_clip_with_vlm(
 
     report: Optional[Dict[str, Any]] = None
     served_model = model_name
+    used_live_vlm = False
 
     if api_key and frames_b64:
         content: List[Dict[str, Any]] = [
@@ -311,6 +350,8 @@ def analyze_video_clip_with_vlm(
                     "- dispatch_action: Recommended action for Mine Control / Dispatch.\n"
                     "- semantic_tags: Array of 5 short lowercase tags for the Golden Data Set.\n"
                     "- primary_target_label: Short 2-3 word uppercase name of the main object or structure in front of the camera in frame 3.\n"
+                    "- target_bbox_pct: Array of 4 integers [left_pct, top_pct, width_pct, height_pct] (each 0-100) bounding primary_target_label in frame 3.\n"
+                    "- target_confidence_pct: Integer 0-100 confidence score for primary_target_label in frame 3.\n"
                     "- path_obstruction_pct: Integer 0-100 indicating probability that the drivable path ahead is obstructed by a hazard.\n"
                     "- maneuver_safety_pct: Integer 0-100 indicating confidence that the vehicle stopped or aligned safely.\n"
                     "- false_positive_pct: Integer 0-100 indicating probability that this trigger was a sensor false alarm."
@@ -329,7 +370,7 @@ def analyze_video_clip_with_vlm(
             {
                 "model": model_name,
                 "temperature": 0.1,
-                "max_tokens": 420,
+                "max_tokens": 450,
                 "messages": [{"role": "user", "content": content}],
             }
         ).encode("utf-8")
@@ -356,6 +397,7 @@ def analyze_video_clip_with_vlm(
                 parsed = json.loads(cleaned)
                 if isinstance(parsed, dict) and "root_cause" in parsed:
                     report = parsed
+                    used_live_vlm = True
         except Exception as err:
             logger.warning(f"[VLM] Live OpenShift AI VLM call failed for {event_id} ({err}); using edge fallback.")
 
@@ -395,30 +437,47 @@ def analyze_video_clip_with_vlm(
                 "false_positive_pct": 3,
             }
 
-    # Build Decision-Box Spatial Grounding & System-1 Decision Matrix
+    # Build Spatial ROI Grounding & System-1 Decision Matrix
     if "AEB" in event_id:
         default_label = "ROCK OBSTRUCTION"
-        bbox_pct = [35, 43, 28, 35]  # [left%, top%, width%, height%] on 16:9 frame
-        coco_bbox = [299, 206, 239, 168]  # [x, y, w, h] at 854x480
+        preset_bbox_pct = [35, 43, 28, 35]
         active_window = [2.5, 10.0]
-        conf = 0.96
-        obs_pct = int(report.get("path_obstruction_pct", 96) or 96)
-        safe_pct = int(report.get("maneuver_safety_pct", 94) or 94)
-        fp_pct = int(report.get("false_positive_pct", 3) or 3)
+        default_conf_pct = 96
+        obs_pct = _safe_pct(report.get("path_obstruction_pct"), 96)
+        safe_pct = _safe_pct(report.get("maneuver_safety_pct"), 94)
+        fp_pct = _safe_pct(report.get("false_positive_pct"), 3)
     else:
         default_label = "CRUSHER HOPPER BAY"
-        bbox_pct = [24, 16, 52, 56]
-        coco_bbox = [205, 77, 444, 269]
+        preset_bbox_pct = [24, 16, 52, 56]
         active_window = [0.0, 10.0]
-        conf = 0.98
-        obs_pct = int(report.get("path_obstruction_pct", 10))
-        safe_pct = int(report.get("maneuver_safety_pct", 99) or 99)
-        fp_pct = int(report.get("false_positive_pct", 2))
+        default_conf_pct = 98
+        obs_pct = _safe_pct(report.get("path_obstruction_pct"), 10)
+        safe_pct = _safe_pct(report.get("maneuver_safety_pct"), 99)
+        fp_pct = _safe_pct(report.get("false_positive_pct"), 2)
 
-    target_label = str(report.get("primary_target_label") or default_label).upper()
+    live_bbox_pct = _safe_bbox_pct(report.get("target_bbox_pct")) if used_live_vlm else None
+    if live_bbox_pct is not None:
+        bbox_pct = live_bbox_pct
+        bbox_source = "live_vlm_grounding"
+        conf_pct = _safe_pct(report.get("target_confidence_pct"), default_conf_pct)
+    else:
+        bbox_pct = preset_bbox_pct
+        bbox_source = "preset_roi_overlay"
+        conf_pct = default_conf_pct
+
+    coco_bbox = [
+        int(round(bbox_pct[0] * 8.54)),
+        int(round(bbox_pct[1] * 4.80)),
+        int(round(bbox_pct[2] * 8.54)),
+        int(round(bbox_pct[3] * 4.80)),
+    ]
+    conf = round(conf_pct / 100.0, 2)
+
+    target_label = str(report.get("primary_target_label") or default_label).strip().upper() or default_label
     report["detection_box"] = {
         "label": target_label,
         "confidence": conf,
+        "source": bbox_source,
         "bbox_pct": bbox_pct,
         "coco_bbox_854x480": coco_bbox,
         "active_window_sec": active_window,
@@ -426,17 +485,17 @@ def analyze_video_clip_with_vlm(
     report["decision_matrix"] = [
         {
             "metric": "Haul Path Obstruction Risk",
-            "probability_pct": max(0, min(100, obs_pct)),
+            "probability_pct": obs_pct,
             "color": "red" if obs_pct >= 60 else "green",
         },
         {
             "metric": "Maneuver / Brake Safety Margin",
-            "probability_pct": max(0, min(100, safe_pct)),
+            "probability_pct": safe_pct,
             "color": "green" if safe_pct >= 75 else "yellow",
         },
         {
             "metric": "Sensor False-Positive Likelihood",
-            "probability_pct": max(0, min(100, fp_pct)),
+            "probability_pct": fp_pct,
             "color": "green" if fp_pct <= 20 else "yellow",
         },
     ]
