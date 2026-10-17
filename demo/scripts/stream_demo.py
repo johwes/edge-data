@@ -59,6 +59,8 @@ def colorize_worker_line(line: str) -> str:
         return f"{YELLOW}{BOLD}[PREDICTIVE MAINT]{RESET} {YELLOW}{line}{RESET}"
     elif "[OPS ADVISORY]" in line:
         return f"{CYAN}{BOLD}[HITL OPS ADVISORY]{RESET} {CYAN}{line}{RESET}"
+    elif "[HITL AUDIT]" in line:
+        return f"{GREEN}{BOLD}[HITL OPERATOR SIGN-OFF]{RESET} {GREEN}{line}{RESET}"
     elif "Extracted" in line and "clip" in line:
         return f"{GREEN}{BOLD}[VIDEO EXTRACTION]{RESET} {GREEN}{line}{RESET}"
     elif "TIER_1_FORENSIC" in line or "AEB" in line or "ROLLOVER" in line:

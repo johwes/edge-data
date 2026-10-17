@@ -661,6 +661,9 @@ class TriagePipeline:
         self.curated_tier_bytes: Dict[str, int] = defaultdict(int)
         self.maintenance_alerts: List[Dict[str, Any]] = []
         self.road_advisories: List[Dict[str, Any]] = []
+        self.truck_telemetry_stats: Dict[str, Dict[str, Any]] = {}
+        self.total_telemetry_evaluated: int = 0
+        self.hitl_approvals: Dict[str, Dict[str, Any]] = {}
         
         # Initialize USearch CPU-accelerated index (128-D Cosine) with ODD baseline manifold
         self.vector_dim = policy.filter_3_novelty.vector_dim
@@ -862,6 +865,20 @@ class TriagePipeline:
             is_anchor = is_signal_active(meta.get("is_shift_anchor"))
             is_random_sample = random.random() < f5_cfg.uniform_sampling_rate
             f5_fired = is_anchor or is_random_sample
+
+        # Evaluate lightweight CAN/IMU & H3 sector advisories on 100% of raw ingested telemetry
+        # BEFORE discarding nominal/duplicate heavy video & LiDAR payloads.
+        raw_h3_index = get_h3_index(gps_coords[0], gps_coords[1], res=9) if len(gps_coords) == 2 else None
+        self._evaluate_edge_advisories(
+            event_id=event_id,
+            truck_id=str(meta.get("truck_id", "HT_402_400T")),
+            h3_index=raw_h3_index or "89c2e3082abffff",
+            can_data=can_data,
+            uncertainty_data=uncertainty_data,
+            f1_fired=f1_fired,
+            f2_fired=f2_fired,
+            is_reversing=is_reversing,
+        )
 
         # Tier Assignment
         candidate_fired = f1_fired or f2_fired or f3_fired or f4_fired or f5_fired
@@ -1072,18 +1089,6 @@ class TriagePipeline:
         duration = time.time() - start_time
         PROCESSING_LATENCY.labels(cell_id=self.cell_id).observe(duration)
 
-        self._evaluate_edge_advisories(
-            event_id=event_id,
-            truck_id=str(meta.get("truck_id", "HT_402_400T")),
-            tier=tier,
-            h3_index=meta.get("h3_index_res9", "89c2e3082abffff"),
-            can_data=can_data,
-            uncertainty_data=uncertainty_data,
-            f1_fired=f1_fired,
-            f2_fired=f2_fired,
-            is_reversing=is_reversing,
-        )
-
         mcap_path.unlink(missing_ok=True)
         self._update_reduction_ratio()
 
@@ -1096,11 +1101,40 @@ class TriagePipeline:
         )
         return curated_mcap_path
 
+    def record_hitl_approval(self, item_id: str, item_type: str, approved: bool) -> Dict[str, Any]:
+        """
+        Records Human-in-the-Loop (HITL) operator sign-off in server-side pipeline state
+        and emits an immutable audit log entry to the edge pod telemetry stream.
+        """
+        ts = time.strftime("%H:%M:%S UTC", time.gmtime())
+        if approved:
+            record = {
+                "id": item_id,
+                "type": item_type,
+                "approved": True,
+                "status": "APPROVED_AT_EDGE",
+                "approved_at": ts,
+            }
+            self.hitl_approvals[item_id] = record
+            logger.info(
+                f"[HITL AUDIT] Operator APPROVED {item_type} '{item_id}' at {ts} (Staged for SAP PM / RHACM GitOps sync)."
+            )
+        else:
+            self.hitl_approvals.pop(item_id, None)
+            record = {
+                "id": item_id,
+                "type": item_type,
+                "approved": False,
+                "status": "PENDING_OPERATOR_REVIEW",
+                "approved_at": None,
+            }
+            logger.info(f"[HITL AUDIT] Operator REVOKED approval for {item_type} '{item_id}' at {ts}.")
+        return record
+
     def _evaluate_edge_advisories(
         self,
         event_id: str,
         truck_id: str,
-        tier: str,
         h3_index: str,
         can_data: Dict[str, Any],
         uncertainty_data: Dict[str, Any],
@@ -1109,10 +1143,15 @@ class TriagePipeline:
         is_reversing: bool,
     ) -> None:
         """
-        Evaluates 100Hz CAN/IMU kinematics and perception entropy to generate:
-          1. Predictive Maintenance & Brake/Tire Thermal Alerts (CAN/IMU spectral + thermal load)
-          2. Haul-Road, Berm & Spill Operator Advisories (Human-in-the-Loop governance)
+        Evaluates lightweight CAN/IMU kinematics and perception entropy across 100% of raw
+        ingested events (prior to Filters 1-6 discarding nominal/duplicate heavy video payloads).
+
+        NOTE(demo-heuristics): In this demo, maintenance work-order alerts and H3 sector advisories
+        are triggered by deterministic CAN/IMU kinematic threshold rules + cumulative per-truck
+        shift cycle counters rather than an online FFT spectral vibration model. Production deployments
+        pair per-truck vibration/thermal baselines with SAP PM / Maximo work-order integration.
         """
+        self.total_telemetry_evaluated += 1
         grade = float(can_data.get("grade_pitch_pct", 0.0))
         lat_g = abs(float(can_data.get("lateral_accel_g", 0.0)))
         aeb = is_signal_active(can_data.get("aeb_active")) or is_signal_active(can_data.get("aeb_triggered"))
@@ -1120,7 +1159,30 @@ class TriagePipeline:
         rollover = is_signal_active(can_data.get("rollover_warning"))
         abs_evt = is_signal_active(can_data.get("abs_traction_event"))
 
-        # 1. Predictive Maintenance & Brake/Tire Thermal Watch
+        # Accumulate per-truck telemetry across all ingested haul cycles (including nominal discards)
+        stats = self.truck_telemetry_stats.setdefault(
+            truck_id,
+            {
+                "cycles_observed": 0,
+                "downhill_cycles": 0,
+                "peak_lat_g": 0.0,
+                "min_grade_pct": 0.0,
+            },
+        )
+        stats["cycles_observed"] += 1
+        if grade <= -6.0:
+            stats["downhill_cycles"] += 1
+        if lat_g > stats["peak_lat_g"]:
+            stats["peak_lat_g"] = lat_g
+        if grade < stats["min_grade_pct"]:
+            stats["min_grade_pct"] = grade
+
+        # Refresh cumulative cycle count on any already-queued alerts for this truck
+        for existing in self.maintenance_alerts:
+            if existing.get("truck_id") == truck_id:
+                existing["cycles_observed"] = stats["cycles_observed"]
+
+        # 1. CAN/IMU Kinematic Heuristic Maintenance & Thermal Watch
         if aeb and grade <= -8.0:
             wo_id = "WO-402"
             if not any(m["wo_id"] == wo_id for m in self.maintenance_alerts):
@@ -1129,14 +1191,16 @@ class TriagePipeline:
                     "truck_id": truck_id,
                     "event_id": event_id,
                     "component": "Wet-Disc Brake Pack & Front-Right Suspension Strut",
-                    "metric_label": f"Brake Thermal Load: 89% ({grade:.1f}% grade AEB, {lat_g:.2f}g)",
+                    "rule_trigger": "Heuristic: AEB + Grade <= -8.0%",
+                    "metric_label": f"Downhill AEB Load ({grade:.1f}% grade, {lat_g:.2f}g peak)",
+                    "cycles_observed": stats["cycles_observed"],
                     "est_days_to_failure": 4,
                     "severity": "HIGH",
                     "recommended_action": "Inspect brake cooling oil & N2 strut charge at shift change ($45k strut/tire protection)",
                 }
                 self.maintenance_alerts.append(alert)
                 logger.info(
-                    f"[PREDICTIVE MAINT] {truck_id} ({event_id}): {alert['metric_label']} -> Queued {wo_id} (Est. 4d to failure)."
+                    f"[PREDICTIVE MAINT] {truck_id} ({event_id}): {alert['metric_label']} -> Queued {wo_id} (Heuristic trigger)."
                 )
         elif rollover or (estop and abs_evt):
             wo_id = "WO-420"
@@ -1146,14 +1210,16 @@ class TriagePipeline:
                     "truck_id": truck_id,
                     "event_id": event_id,
                     "component": "Steering Tie-Rod & Rear Outer Tire Bead",
+                    "rule_trigger": "Heuristic: Rollover Warning | (E-Stop + ABS Slip)",
                     "metric_label": f"ABS Slip + Rollover Warning ({lat_g:.2f}g E-Stop)",
+                    "cycles_observed": stats["cycles_observed"],
                     "est_days_to_failure": 2,
                     "severity": "CRITICAL",
                     "recommended_action": "Mandatory pit-bay torque & ultrasonic tire bead check before next haul cycle",
                 }
                 self.maintenance_alerts.append(alert)
                 logger.info(
-                    f"[PREDICTIVE MAINT] {truck_id} ({event_id}): {alert['metric_label']} -> Queued {wo_id} (Est. 2d to failure)."
+                    f"[PREDICTIVE MAINT] {truck_id} ({event_id}): {alert['metric_label']} -> Queued {wo_id} (Heuristic trigger)."
                 )
         elif is_reversing and grade <= -7.0:
             wo_id = "WO-415"
@@ -1163,14 +1229,16 @@ class TriagePipeline:
                     "truck_id": truck_id,
                     "event_id": event_id,
                     "component": "Rear Final-Drive Planetary Gear & Dump Hinge Pin",
+                    "rule_trigger": "Heuristic: Reversing + Grade <= -7.0%",
                     "metric_label": f"Reverse Torque Spike ({grade:.1f}% approach, {lat_g:.2f}g)",
+                    "cycles_observed": stats["cycles_observed"],
                     "est_days_to_failure": 9,
                     "severity": "MEDIUM",
-                    "recommended_action": "Schedule oil spectral sampling at next J3105/3 Megawatt charging dock stop",
+                    "recommended_action": "Schedule oil sampling at next J3105/3 Megawatt charging dock stop",
                 }
                 self.maintenance_alerts.append(alert)
                 logger.info(
-                    f"[PREDICTIVE MAINT] {truck_id} ({event_id}): {alert['metric_label']} -> Queued {wo_id} (Est. 9d to failure)."
+                    f"[PREDICTIVE MAINT] {truck_id} ({event_id}): {alert['metric_label']} -> Queued {wo_id} (Heuristic trigger)."
                 )
 
         # 2. Human-in-the-Loop Haul-Road, Berm & Spill Advisories
@@ -1184,7 +1252,7 @@ class TriagePipeline:
                     "hazard_type": "Bench Wall Rockfall & Haul Path Obstruction",
                     "severity": "CRITICAL",
                     "dispatch_recommendation": "Hold Ramp 04 haul traffic & dispatch Wheel Loader + Geotech inspection",
-                    "policy_advisory": "HITL Policy Proposal: Raise Filter 1 TTC threshold (1.5s -> 3.0s) on Ramp 04",
+                    "policy_advisory": "HITL Policy Proposal: Stage Filter 1 TTC threshold (1.5s -> 3.0s) on Ramp 04",
                 }
                 self.road_advisories.append(adv)
                 logger.info(
@@ -1200,7 +1268,7 @@ class TriagePipeline:
                     "hazard_type": "Dump Pocket Spillage & Approach Berm Clearance",
                     "severity": "HIGH",
                     "dispatch_recommendation": "Dispatch Auxiliary Sweeper to clear crusher approach berm (Prevents $45k tire cuts)",
-                    "policy_advisory": "HITL Policy Proposal: Maintain Filter 4 Crusher Geofence until spillage cleared",
+                    "policy_advisory": "HITL Policy Proposal: Stage Filter 4 Crusher Geofence extension until spillage cleared",
                 }
                 self.road_advisories.append(adv)
                 logger.info(
@@ -1218,7 +1286,7 @@ class TriagePipeline:
                     "hazard_type": f"Heavy Dust Plume Occlusion (Entropy {entropy:.2f}, Conf {conf_pct}%)",
                     "severity": "MEDIUM",
                     "dispatch_recommendation": "Dispatch Water Truck to Haul Sector 02 & advise reduced autonomous speed",
-                    "policy_advisory": "HITL Policy Proposal: Temporarily throttle Filter 5 uniform sampling if dust persists",
+                    "policy_advisory": "HITL Policy Proposal: Stage Filter 5 uniform sampling throttle if dust persists",
                 }
                 self.road_advisories.append(adv)
                 logger.info(

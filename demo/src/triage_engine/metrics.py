@@ -149,6 +149,38 @@ class UnifiedMetricsHandler(BaseHTTPRequestHandler):
         else:
             self.send_error(404, "Not Found")
 
+    def do_POST(self):
+        url_path = self.path.split("?")[0]
+        if url_path == "/api/hitl-approve":
+            self.handle_hitl_approve()
+        else:
+            self.send_error(404, "Not Found")
+
+    def handle_hitl_approve(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            raw_body = self.rfile.read(min(length, 8192)) if length > 0 else b"{}"
+            req = json.loads(raw_body.decode("utf-8"))
+        except Exception as err:
+            self.send_error(400, f"Invalid JSON body: {err}")
+            return
+
+        item_id = str(req.get("id", "")).strip()
+        item_type = str(req.get("type", "advisory")).strip()
+        approved = bool(req.get("approved", True))
+        if not item_id or not self.pipeline_ref or not hasattr(self.pipeline_ref, "record_hitl_approval"):
+            self.send_error(400, "Missing id or pipeline unavailable")
+            return
+
+        record = self.pipeline_ref.record_hitl_approval(item_id=item_id, item_type=item_type, approved=approved)
+        resp_bytes = json.dumps(record).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(resp_bytes)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(resp_bytes)
+
     def handle_api_status(self, force_live_brief: bool = False, brief_only: bool = False):
         from .pipeline import generate_shift_handover_brief
 
@@ -221,22 +253,40 @@ class UnifiedMetricsHandler(BaseHTTPRequestHandler):
         if events_curated == 0 and curated_files:
             events_curated = len(curated_files)
 
-        maint_alerts = list(getattr(self.pipeline_ref, "maintenance_alerts", []) or []) if self.pipeline_ref else []
+        hitl_map = dict(getattr(self.pipeline_ref, "hitl_approvals", {}) or {}) if self.pipeline_ref else {}
+        maint_alerts = []
+        raw_maint = list(getattr(self.pipeline_ref, "maintenance_alerts", []) or []) if self.pipeline_ref else []
+        for item in raw_maint:
+            enriched_m = dict(item)
+            wo_id = enriched_m.get("wo_id", "")
+            hitl_rec = hitl_map.get(wo_id)
+            enriched_m["hitl_approved"] = bool(hitl_rec and hitl_rec.get("approved"))
+            enriched_m["hitl_approved_at"] = hitl_rec.get("approved_at") if hitl_rec else None
+            maint_alerts.append(enriched_m)
+
         road_advisories = []
         raw_advisories = list(getattr(self.pipeline_ref, "road_advisories", []) or []) if self.pipeline_ref else []
         for adv in raw_advisories:
             enriched = dict(adv)
+            adv_id = enriched.get("advisory_id", "")
+            hitl_rec = hitl_map.get(adv_id)
+            enriched["hitl_approved"] = bool(hitl_rec and hitl_rec.get("approved"))
+            enriched["hitl_approved_at"] = hitl_rec.get("approved_at") if hitl_rec else None
             vlm_match = vlm_by_event.get(enriched.get("event_id", ""))
             if vlm_match and vlm_match.get("root_cause"):
                 enriched["vlm_context"] = vlm_match.get("root_cause")
             road_advisories.append(enriched)
+
+        total_ingested_count = events_ingested or len(curated_files) + events_discarded
+        telemetry_evaluated = getattr(self.pipeline_ref, "total_telemetry_evaluated", 0) if self.pipeline_ref else 0
 
         payload = {
             "cell_id": getattr(self.pipeline_ref, "cell_id", "pilbara-cell-04") if self.pipeline_ref else "pilbara-cell-04",
             "bytes_ingested": ingested_bytes,
             "bytes_curated": curated_bytes,
             "reduction_pct": reduction_pct,
-            "events_ingested": events_ingested or len(curated_files) + events_discarded,
+            "events_ingested": total_ingested_count,
+            "telemetry_evaluated": telemetry_evaluated or total_ingested_count,
             "events_curated": events_curated,
             "events_discarded": events_discarded,
             "dedup_suppressions": dedup_suppressions,
