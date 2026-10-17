@@ -255,24 +255,6 @@ def _safe_pct(val: Any, default: int) -> int:
     return default
 
 
-def _safe_bbox_pct(val: Any) -> Optional[List[int]]:
-    """Validate [left_pct, top_pct, width_pct, height_pct] returned by VLM in 0..100 image space."""
-    if not isinstance(val, list) or len(val) != 4:
-        return None
-    parsed: List[int] = []
-    for item in val:
-        pct = _safe_pct(item, -1)
-        if pct < 0:
-            return None
-        parsed.append(pct)
-    left, top, width, height = parsed
-    if left > 90 or top > 90 or width < 5 or height < 5:
-        return None
-    width = min(width, 100 - left)
-    height = min(height, 100 - top)
-    return [left, top, width, height]
-
-
 def analyze_video_clip_with_vlm(
     clip_path: Path,
     event_id: str,
@@ -333,7 +315,6 @@ def analyze_video_clip_with_vlm(
 
     report: Optional[Dict[str, Any]] = None
     served_model = model_name
-    used_live_vlm = False
 
     if api_key and frames_b64:
         content: List[Dict[str, Any]] = [
@@ -395,7 +376,6 @@ def analyze_video_clip_with_vlm(
                 parsed = json.loads(cleaned)
                 if isinstance(parsed, dict) and "root_cause" in parsed:
                     report = parsed
-                    used_live_vlm = True
         except Exception as err:
             logger.warning(f"[VLM] Live OpenShift AI VLM call failed for {event_id} ({err}); using edge fallback.")
 
@@ -435,7 +415,12 @@ def analyze_video_clip_with_vlm(
                 "false_positive_pct": 3,
             }
 
-    # Build Calibrated Multi-Keyframe ROI Track & System-1 Decision Matrix
+    # Build Calibrated Multi-Keyframe ROI Track & System-1 Decision Matrix.
+    # NOTE(demo-roi-track): Spatial keyframe tracks below are calibrated to the two bundled 10s demo video
+    # assets (EVT_F1_AEB_DOWNHILL_001 and EVT_REVERSING_HOPPER_MANEUVER_006), while target label, root cause,
+    # temporal progression, and System-1 decision probabilities come from live VLM inference.
+    # TODO(live-grounding): Parse native Qwen2.5-VL <|box_start|>(x1,y1),(x2,y2)<|box_end|> 0..1000 tokens
+    # per extracted keyframe to support arbitrary uncalibrated video streams.
     if "AEB" in event_id:
         default_label = "ROCK OBSTRUCTION"
         bbox_pct = [40, 41, 21, 28]
