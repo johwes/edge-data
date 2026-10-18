@@ -7,7 +7,7 @@ A practical, enterprise-grade demonstration of **Autonomous Fleet Data Triage an
 ## Architecture Overview
 
 ```
-100 Raw Vehicle Events (~102 MB demo / ~200 GB prod)
+100 Raw Vehicle Events (~113 MB demo incl. 2 raw 30s camera streams / ~200 GB prod)
   │
   ▼
 [NetApp Ingest NFS Ring Buffer (raw-ingest-pvc / RWX)]
@@ -25,9 +25,9 @@ A practical, enterprise-grade demonstration of **Autonomous Fleet Data Triage an
   ├── 1 Duplicate Event  ──> Suppressed by Filter 6
   │
   ▼
-[Curated & Decimated Golden Data Set (~1.4 MB demo / ~1.4 GB prod)]
+[Curated & Decimated Golden Data Set (~5 MB demo incl. 2 forensic video clips / ~1.4 GB prod)]
   └── Written to NetApp Curated Storage (gds-curated-pvc / RWX)
-  └── Live bandwidth reduction (~98.6%) exported to OpenShift Monitoring (/metrics)
+  └── Live bandwidth reduction (~95% in the demo; 98%+ at production scale) exported to OpenShift Monitoring (/metrics)
 ```
 
 ---
@@ -167,7 +167,7 @@ oc logs -l app.kubernetes.io/component=triage-worker -f
 #### 2. OpenShift Web Console Metrics Dashboard
 Navigate to **Observe $\rightarrow$ Metrics** in the OpenShift Web Console and query:
 
-* `edge_triage_reduction_percentage` $\rightarrow$ Shows live **~84% - 98%** data reduction.
+* `edge_triage_reduction_percentage` $\rightarrow$ Shows live **~95%** data reduction for the bundled demo run (production-scale payloads reach 98%+).
 * `edge_triage_bytes_ingested_total` vs `edge_triage_bytes_curated_total` $\rightarrow$ Compares raw ingested bytes against curated output bytes.
 * `edge_triage_events_curated_total` $\rightarrow$ Breaks down curated events by tier (`tier="TIER_1_FORENSIC"`, etc.).
 * `edge_triage_dedup_suppressions_total` $\rightarrow$ Counts redundant events eliminated by Filter 6.

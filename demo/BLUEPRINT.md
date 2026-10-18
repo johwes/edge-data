@@ -181,9 +181,9 @@ Multi-gigabyte vehicle recordings landing across 10G optical wireless berths or 
   * **Stage 3 Pruning:** Preserved candidates are decimated from ~2.0 GB down to **~240 to 810 MB each** (nominal average ~350 MB; up to ~800 MB if reverse-gear safety exception preserves rear sensors).
   * **Output Volume:** Total curated Golden Data Set volume = **~1.4 to 2.4 GB**, achieving a **~98.0% to 99.1% data volume reduction**.
 * **Demo Benchmark Run (Calibrated for Fast Cluster Testing):**
-  * **Input Volume:** 100 synthetic MCAP packages @ ~1,033 KB each + 2 raw 30s camera streams = **~105.9 MB raw ingest**.
-  * **Filtering & Decimation:** 91 nominal events discarded; 1 duplicate suppressed by Filter 6; 8 unique candidate MCAPs pruned to ~169 KB forward / ~566 KB reversing + 2 extracted 10s H.264 video clips (~180 KB each).
-  * **Output Volume:** Total curated volume = **~2.1 MB**, demonstrating **~98.0% bandwidth reduction** live on Prometheus gauges and the Web Dashboard within seconds.
+  * **Input Volume:** 100 synthetic MCAP packages @ ~1,033 KB each + 2 raw 30s camera streams = **~113 MB raw ingest** (~103 MB MCAP + ~10 MB raw video).
+  * **Filtering & Decimation:** 91 nominal events discarded; 1 duplicate suppressed by Filter 6; 8 unique candidate MCAPs pruned to ~169 KB forward / ~566 KB reversing + 2 extracted 10s 10 FPS H.264 video clips (~1.5-1.8 MB each).
+  * **Output Volume:** Total curated volume = **~5.1 MB**, demonstrating **~95% bandwidth reduction** (production-scale payloads reach 98%+) live on Prometheus gauges and the Web Dashboard within seconds.
 
 ---
 
@@ -309,7 +309,7 @@ This pushes `edge-triage-engine:latest` into the cluster's internal registry, wh
 ### 6.3 OpenShift Monitoring & Telemetry Dashboard (`06_monitoring.yaml`)
 The triage worker exports real-time metrics on port 8080 (`/metrics`), scraped automatically by OpenShift's cluster monitoring stack:
 * `edge_triage_bytes_ingested_total` vs `edge_triage_bytes_curated_total`
-* `edge_triage_reduction_percentage` (exposes live 98–99% volume reduction)
+* `edge_triage_reduction_percentage` (exposes live volume reduction: ~95% in the bundled demo run, 98%+ at production scale)
 * `edge_triage_events_curated_total` (labeled by `tier`)
 * `edge_triage_dedup_suppressions_total` (counts Filter 6 duplicates suppressed)
 
@@ -370,5 +370,5 @@ oc logs -l app.kubernetes.io/component=triage-worker -f
 # Verify curated packages and extracted incident clips on the Curated Volume
 oc exec deploy/edge-triage-worker -- ls -lh /mnt/gds_curated
 ```
-In the OpenShift Web Console under **Observe -> Metrics**, query `edge_triage_reduction_percentage` to observe the live data volume reduction graph (~84% - 99% depending on novelty distribution).
+In the OpenShift Web Console under **Observe -> Metrics**, query `edge_triage_reduction_percentage` to observe the live data volume reduction graph (~95% for the bundled demo run; varies with novelty distribution).
 

@@ -21,7 +21,7 @@ You are presenting as the **Autonomous Systems & Edge Infrastructure Architect**
    - Activates in-container FFmpeg to slice the exact **10-second temporal window** ($T-5\text{s}$ to $T+5\text{s}$) around the brake trigger, decimating it from 30 FPS to 10 FPS H.264 MP4 (slashing video footprint by ~85% while preserving full forensic fidelity).
    - Suppresses duplicate sensor frames from following trucks via **Spatiotemporal Coreset Deduplication (Filter 6)**.
    - Discards nominal empty road data at the edge.
-   - **The Bottom Line:** Achieves an **~98.0% reduction** in transferred data volume (~106 MB raw ingested $\rightarrow$ ~2.1 MB curated across 8 high-entropy packages and 2 video clips) while preserving 100% of safety-critical evidence.
+   - **The Bottom Line:** Achieves a **~95% reduction** in transferred data volume (~113 MB raw ingested $\rightarrow$ ~5.1 MB curated across 8 high-entropy packages and 2 video clips; 98%+ at production scale) while preserving 100% of safety-critical evidence.
 
 ---
 
@@ -100,7 +100,7 @@ Switch to the **Browser Window**:
 
 > *"Now let's look at the results on our live OpenShift Dashboard:*
 >
-> * Look at the **Bandwidth Reduction Gauge**: We ingested **~106 MB** of raw telemetry across 100 offload events, and our curated Golden Data Set is only **~2.1 MB** (8 high-value events + 2 forensic video clips)—an **~98.0% reduction** in network payload achieved in seconds!
+> * Look at the **Bandwidth Reduction Gauge**: We ingested **~113 MB** of raw telemetry across 100 offload events, and our curated Golden Data Set is only **~5.1 MB** (8 high-value events + 2 forensic video clips)—a **~95% reduction** in network payload achieved in seconds!
 > * Every single event was evaluated in sub-millisecond to low-millisecond latency (with FFmpeg video slicing completing in ~150ms).
 >
 > *Now, let's verify the forensic evidence. Right here in the dashboard, I can click on **EVT_F1_AEB_DOWNHILL_001** and press play:*
@@ -118,7 +118,7 @@ Switch to the **Browser Window**:
 > * **Red Hat Advanced Cluster Management (RHACM):** The triage policies you saw are declarative ConfigMaps. An autonomy engineer at headquarters can tune novelty thresholds in Git, and RHACM automatically enforces the policy across 50 mining pits worldwide.*
 > * **Vendor-Neutral Storage:** Our storage claims are decoupled. Here in AWS ROSA, we're backed by AWS EFS CSI (`efs-sc`). On-prem at the mine site, the exact same containers bind to NetApp ONTAP NVMe arrays with Astra Trident CSI.*
 >
-> *In summary: we've eliminated 98% of edge data waste, cut cloud costs, and preserved 100% of our safety-critical intelligence. Thank you, and I'd be happy to take questions."*
+> *In summary: we've eliminated ~95% of edge data waste in this demo (98%+ at production scale), cut cloud costs, and preserved 100% of our safety-critical intelligence. Thank you, and I'd be happy to take questions."*
 
 ---
 
